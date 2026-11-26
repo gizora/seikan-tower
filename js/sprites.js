@@ -476,6 +476,11 @@
     fire:  { R: '#c83a2a', r: '#8a2a1a', G: '#e08a3a' },
     king:  { G: '#5a9a3a', L: '#a02a2a', A: '#e0b040' },
     ogre:  { O: '#b05a3a', o: '#7a3a22', L: '#4a3a5a', A: '#2a2030' },
+    lava:  { B: '#e8642a', b: '#a8381a', W: '#ffd27a', S: '#8a4a34', s: '#5a2a1e', G: '#ffb030', E: '#ffe040' },
+    lavaBoss: { S: '#6a2a1e', s: '#3a140e', G: '#ff6a1a' },
+    sea:   { B: '#3a8ab8', b: '#1e5a7a', W: '#a8e8ff', E: '#ffe060', M: '#6a9a9a' },
+    sky:   { B: '#e0e4f0', E: '#3a6ad8', W: '#ffffff', S: '#d8dce8', s: '#9aa2b8', G: '#ffe060' },
+    small: { P: '#2a3a8a', E: '#5ad0ff', Y: '#ffffff' },
   };
 
   function enemyGrid(key) {

@@ -6,14 +6,15 @@
   const E = isNode ? require('./battle.js') : root.BattleEngine;
 
   const SAVE_KEY = 'seikan-tower-save-v1';
-  const VERSION = 3;
+  const VERSION = 4;
 
   function expToNext(lv) { return 30 + 25 * (lv - 1); }
-  function floorExp(fi) { return 40 + 30 * (fi + 1); }
-  function floorGold(fi) { return 50 + 40 * (fi + 1); }
-  function firstClearGems(fi) { return (fi + 1) % 5 === 0 ? 800 : 300; }
-  function firstClearShards(fi) { return 10 + 2 * (fi + 1) + ((fi + 1) % 5 === 0 ? 30 : 0); }
-  function repeatShards(fi) { return 2 + Math.floor((fi + 1) / 3); }
+  const isBossFloor = (fi) => (fi + 1) % D.FLOORS_PER_ZONE === 0;
+  function floorExp(fi) { return 40 + 9 * (fi + 1); }
+  function floorGold(fi) { return 50 + 12 * (fi + 1); }
+  function firstClearGems(fi) { return isBossFloor(fi) ? 800 : 100; }
+  function firstClearShards(fi) { return 4 + Math.floor(0.6 * (fi + 1)) + (isBossFloor(fi) ? 30 : 0); }
+  function repeatShards(fi) { return 1 + Math.floor((fi + 1) / 10); }
   function traitSlots(star) { return 1 + (star >= 3 ? 1 : 0) + (star >= 5 ? 1 : 0); }
   const clampTrust = (t) => Math.max(0, Math.min(100, Math.round(t)));
 
@@ -27,7 +28,7 @@
     const def = D.heroById[id];
     const traits = [];
     for (let i = 0; i < traitSlots(def.rarity); i++) traits.push({ id: randomTrait(rng, traits.map(t => t.id)), lv: 1 });
-    return { lv: 1, exp: 0, star: def.rarity, trust: D.PERSONALITIES[def.pers].trust, traits, talked: -1 };
+    return { lv: 1, exp: 0, star: def.rarity, trust: D.PERSONALITIES[def.pers].trust, traits, equip: { weapon: 0, armor: 0 } };
   }
 
   function rollDifficulty(rng) {
@@ -73,6 +74,11 @@
       difficulty: rollDifficulty(),                 // 世界の難易度（始めたときにランダムで決まる）
       base: { name: randomBaseName(), buildings: startBuildings() },
       heroTactics: {},                              // 英雄ごとの「狙う敵」（戦略室 Lv5）
+      proposals: [],                                // 英雄からの提案（待機所）
+      items: [],                                    // 武器倉庫にある装備 [{ uid, kind, tier }]
+      potions: { styptic: 0, calm: 0, heal: 0 },    // 錬金場で作った薬
+      nextUid: 1,
+      worldSaved: false,
     };
   }
 
@@ -86,7 +92,8 @@
     out.exp = Math.max(0, int(h.exp, 0));
     if (version >= 2) {
       out.trust = clampTrust(int(h.trust, out.trust));
-      out.talked = int(h.talked, -1);
+      const eq = (h.equip && typeof h.equip === 'object') ? h.equip : {};
+      out.equip = { weapon: Math.max(0, Math.min(5, int(eq.weapon, 0))), armor: Math.max(0, Math.min(5, int(eq.armor, 0))) };
       const tr = Array.isArray(h.traits) ? h.traits.filter(t => t && D.TRAITS[t.id]) : [];
       const seen = new Set();
       const clean = [];
@@ -105,7 +112,7 @@
   /** 保存データを確かめて整える（前の版のデータもここで引き継ぐ） */
   function sanitize(s) {
     const base = newState();
-    if (!s || typeof s !== 'object' || ![1, 2, 3].includes(s.v)) return base;
+    if (!s || typeof s !== 'object' || ![1, 2, 3, 4].includes(s.v)) return base;
     const version = s.v;
     const out = Object.assign(base, s, { v: VERSION });
     out.tactics = Object.assign({}, D.DEFAULT_TACTICS, s.tactics || {});
@@ -122,7 +129,9 @@
     while (party.length < D.PARTY_SIZE) party.push(null);
     const seen = new Set();
     out.party = party.map(id => (id && out.heroes[id] && !seen.has(id) && seen.add(id)) ? id : null);
-    out.cleared = Math.min(D.FLOORS.length, Math.max(0, int(s.cleared, 0)));
+    // 第3版まで（30階）の進み具合は、100階の塔に引き伸ばす
+    const oldCleared = Math.max(0, int(s.cleared, 0));
+    out.cleared = Math.min(D.FLOORS.length, version < 4 ? Math.round(Math.min(30, oldCleared) * 10 / 3) : oldCleared);
     out.gems = Math.max(0, int(s.gems, 0));
     out.gold = Math.max(0, int(s.gold, 0));
     out.pity = Math.max(0, int(s.pity, 0));
@@ -139,16 +148,26 @@
       let lv = sb.buildings ? int(sb.buildings[k], def.start) : def.start;
       if (version < 3) {
         // 前の版からは、今いる英雄が暮らせる宿舎と、進み具合に合った戦略室を用意する
-        if (k === 'dorm') { lv = 1; while (lv < def.max && D.DORM_CAP[lv] < Object.keys(out.heroes).length) lv++; }
-        if (k === 'strategy') lv = Math.min(def.max, Math.floor(out.cleared / 5));
+        if (k === 'dorm') { lv = 1; while (lv < D.BUILDING_MAX && D.DORM_CAP[lv] < Object.keys(out.heroes).length) lv++; }
+        if (k === 'strategy') lv = Math.min(D.BUILDING_MAX, Math.floor(oldCleared / 5));
       }
-      out.base.buildings[k] = Math.max(def.start, Math.min(def.max, lv));
+      out.base.buildings[k] = Math.max(def.start, Math.min(D.BUILDING_MAX, lv));
     }
     out.heroTactics = {};
     for (const [id, t] of Object.entries(s.heroTactics || {})) {
       if (out.heroes[id] && t && D.TACTICS.target.options.some(o => o.value === t.target)) out.heroTactics[id] = { target: t.target };
     }
     out.stats.commands = Math.max(0, int(out.stats.commands, 0));
+    // 第4版: 提案・装備・薬
+    out.nextUid = Math.max(1, int(s.nextUid, 1));
+    out.items = Array.isArray(s.items) ? s.items.filter(it => it && D.EQUIP_KINDS[it.kind] && int(it.tier, 0) >= 1 && int(it.tier, 0) <= 5)
+      .map(it => ({ uid: Math.max(1, int(it.uid, out.nextUid++)), kind: it.kind, tier: int(it.tier, 1) })).slice(0, 60) : [];
+    for (const it of out.items) out.nextUid = Math.max(out.nextUid, it.uid + 1);
+    const sp = (s.potions && typeof s.potions === 'object') ? s.potions : {};
+    out.potions = {};
+    for (const k of Object.keys(D.POTIONS)) out.potions[k] = Math.max(0, Math.min(20, int(sp[k], 0)));
+    out.proposals = Array.isArray(s.proposals) ? s.proposals.filter(p => p && out.heroes[p.heroId] && D.PROPOSALS[p.kind]).slice(0, 5) : [];
+    out.worldSaved = !!s.worldSaved || out.cleared >= D.FLOORS.length;
     // 戦略室でまだ使えない作戦は、ふつうの作戦にそろえる
     for (const key of Object.keys(D.TACTICS)) {
       if (D.TACTIC_UNLOCK[key] > out.base.buildings.strategy) out.tactics[key] = D.DEFAULT_TACTICS[key];
@@ -189,7 +208,7 @@
     buildInfo(k) {
       const lv = this.buildingLv(k);
       const def = D.BUILDINGS[k];
-      if (lv >= def.max) return { can: false, reason: 'max', lv };
+      if (lv >= D.BUILDING_MAX) return { can: false, reason: 'max', lv };
       const next = lv + 1;
       const cost = D.BUILD_COST[next];
       const req = D.BUILD_REQ[next];
@@ -217,7 +236,9 @@
 
     // ---------- 世界の難易度・滅んだ世界 ----------
     difficulty() { return D.DIFFICULTIES[this.state.difficulty]; },
-    worldSaved(wi) { return this.state.cleared >= (wi + 1) * D.FLOORS_PER_WORLD; },
+    /** 区域のボスを倒して、その地方を取り戻したか */
+    zoneCleared(zi) { return this.state.cleared >= (zi + 1) * D.FLOORS_PER_ZONE; },
+    landFreed(landId) { const zi = D.ZONES.findIndex(z => z.land === landId); return zi >= 0 && this.zoneCleared(zi); },
     /** その英雄がいま思い出している記憶の数（★2で1つ、★5で4つ） */
     memoryCount(id) { return Math.min(4, this.owned(id).star - 1); },
 
@@ -230,7 +251,141 @@
     },
 
     /** 戦闘に渡す設定（難易度・命令ゲージ） */
-    battleOptions() { return { enemyMult: this.difficulty().enemy, cmdCost: this.cmdCost() }; },
+    battleOptions() { return { enemyMult: this.difficulty().enemy, cmdCost: this.cmdCost(), potions: Object.assign({}, this.state.potions) }; },
+
+    // ---------- 装備（武器倉庫） ----------
+    maxForgeTier() { return this.buildingLv('armory'); },
+    forgeCost(tier) { return D.EQUIP_TIERS[tier].cost; },
+    /** 装備を作る。heroId があれば、その英雄にそのまま持たせる */
+    forge(kind, tier, heroId) {
+      const s = this.state;
+      if (!D.EQUIP_KINDS[kind] || !D.EQUIP_TIERS[tier]) return { ok: false, reason: 'bad' };
+      if (tier > this.maxForgeTier()) return { ok: false, reason: 'armory' };
+      const cost = this.forgeCost(tier);
+      if (s.gold < cost) return { ok: false, reason: 'gold', cost };
+      s.gold -= cost;
+      const item = { uid: s.nextUid++, kind, tier };
+      s.items.push(item);
+      if (heroId) this.equip(heroId, item.uid);
+      this.save();
+      return { ok: true, item, cost };
+    },
+    /** 倉庫の装備を英雄に持たせる（持っていた装備は倉庫に戻る） */
+    equip(heroId, uid) {
+      const s = this.state;
+      const h = this.owned(heroId);
+      const i = s.items.findIndex(it => it.uid === uid);
+      if (!h || i < 0) return false;
+      const item = s.items[i];
+      s.items.splice(i, 1);
+      const cur = h.equip[item.kind];
+      if (cur) s.items.push({ uid: s.nextUid++, kind: item.kind, tier: cur });
+      h.equip[item.kind] = item.tier;
+      this.save();
+      return true;
+    },
+    unequip(heroId, kind) {
+      const h = this.owned(heroId);
+      if (!h || !h.equip[kind]) return false;
+      this.state.items.push({ uid: this.state.nextUid++, kind, tier: h.equip[kind] });
+      h.equip[kind] = 0;
+      this.save();
+      return true;
+    },
+
+    // ---------- 薬（錬金場） ----------
+    potionCap() { return D.POTION_CAP[this.buildingLv('alchemy')]; },
+    potionTotal() { return Object.values(this.state.potions).reduce((a, b) => a + b, 0); },
+    canBrew(key) { return this.buildingLv('alchemy') >= D.POTIONS[key].lv; },
+    brew(key) {
+      const s = this.state;
+      const p = D.POTIONS[key];
+      if (!p || !this.canBrew(key)) return { ok: false, reason: 'alchemy' };
+      if (this.potionTotal() >= this.potionCap()) return { ok: false, reason: 'cap' };
+      if (s.gold < p.cost) return { ok: false, reason: 'gold', cost: p.cost };
+      s.gold -= p.cost;
+      s.potions[key]++;
+      this.save();
+      return { ok: true };
+    },
+
+    // ---------- 英雄からの提案（待機所） ----------
+    /** 戦闘のあとなどに、英雄が提案をすることがある。できた提案を返す */
+    maybePropose(force) {
+      const s = this.state;
+      const plaza = this.buildingLv('plaza');
+      if (s.proposals.length >= D.PLAZA_MAX[plaza]) return null;
+      if (!force && this.rng() > D.PLAZA_CHANCE[plaza]) return null;
+      const ids = Object.keys(s.heroes).filter(id => !s.proposals.some(p => p.heroId === id));
+      if (!ids.length) return null;
+      const heroId = ids[Math.floor(this.rng() * ids.length)];
+      const h = this.owned(heroId);
+      const def = D.heroById[heroId];
+      const kinds = ['train', 'feast', 'tactic'];
+      if (!this.inParty(heroId)) kinds.push('join', 'join');
+      if (this.buildingLv('alchemy') >= 1 && this.potionTotal() < this.potionCap()) kinds.push('potion');
+      if (this.buildingLv('armory') >= 1 && (h.equip.weapon < this.maxForgeTier() || h.equip.armor < this.maxForgeTier())) kinds.push('forge');
+      const kind = kinds[Math.floor(this.rng() * kinds.length)];
+      const p = { id: s.nextUid++, heroId, kind, data: {} };
+      if (kind === 'train') p.data.cost = 100 + h.lv * 20;
+      if (kind === 'feast') p.data.cost = 300;
+      if (kind === 'tactic') {
+        const wish = { brave: ['stance', 'attack'], careful: ['stance', 'defend'], caring: ['healLine', 0.7], loyal: ['stance', 'balance'], whimsical: ['target', 'auto'] }[def.pers];
+        p.data = this.tacticUnlocked(wish[0]) ? { key: wish[0], value: wish[1] } : { key: 'stance', value: def.pers === 'brave' ? 'attack' : 'defend' };
+        if (s.tactics[p.data.key] === p.data.value) p.data = { key: 'stance', value: s.tactics.stance === 'attack' ? 'balance' : 'attack' };
+      }
+      if (kind === 'potion') { const keys = Object.keys(D.POTIONS).filter(k => this.canBrew(k)); p.data.potion = keys[Math.floor(this.rng() * keys.length)]; p.data.cost = D.POTIONS[p.data.potion].cost; }
+      if (kind === 'forge') { const k = h.equip.weapon <= h.equip.armor ? 'weapon' : 'armor'; p.data.equip = k; p.data.tier = Math.min(this.maxForgeTier(), h.equip[k] + 1); p.data.cost = this.forgeCost(p.data.tier); }
+      s.proposals.push(p);
+      this.save();
+      return p;
+    },
+    /** 提案の文（「〜が〜を提案しています」） */
+    proposalText(p) {
+      const n = D.heroById[p.heroId].name;
+      let what = D.PROPOSALS[p.kind].name;
+      if (p.kind === 'tactic') {
+        const opt = D.TACTICS[p.data.key].options.find(o => o.value === p.data.value);
+        what = p.data.key === 'stance' ? `作戦「${opt ? opt.name : ''}」` : `作戦「${D.TACTICS[p.data.key].label}: ${opt ? opt.name : ''}」`;
+      }
+      if (p.kind === 'potion') what = `${D.POTIONS[p.data.potion].name}づくり`;
+      if (p.kind === 'forge') what = `${D.EQUIP_TIERS[p.data.tier].name}の${D.EQUIP_KINDS[p.data.equip].name}の新調`;
+      return `${n}が${what}を提案しています`;
+    },
+    answerProposal(pid, accept) {
+      const s = this.state;
+      const i = s.proposals.findIndex(p => p.id === pid);
+      if (i < 0) return { ok: false, reason: 'none' };
+      const p = s.proposals[i];
+      const h = this.owned(p.heroId);
+      if (!accept) {
+        s.proposals.splice(i, 1);
+        h.trust = clampTrust(h.trust - 2);
+        this.save();
+        return { ok: true, accepted: false, trust: -2 };
+      }
+      const cost = p.data.cost || 0;
+      if (s.gold < cost) return { ok: false, reason: 'gold', cost };
+      s.gold -= cost;
+      let detail = '';
+      if (p.kind === 'train') { const up = this.gainExp(p.heroId, Math.round(expToNext(h.lv) * 0.6)); detail = up ? `Lv${h.lv} になった` : '経験値を得た'; }
+      if (p.kind === 'join') {
+        if (!this.inParty(p.heroId)) {
+          const empty = s.party.indexOf(null);
+          if (empty >= 0) s.party[empty] = p.heroId;
+          else { const weakest = this.partyIds().reduce((m, id) => (this.power(id) < this.power(m) ? id : m)); s.party[s.party.indexOf(weakest)] = p.heroId; detail = `${D.heroById[weakest].name}と交代した`; }
+        }
+      }
+      if (p.kind === 'tactic') s.tactics[p.data.key] = p.data.value;
+      if (p.kind === 'feast') for (const id of Object.keys(s.heroes)) s.heroes[id].trust = clampTrust(s.heroes[id].trust + 2);
+      if (p.kind === 'potion') { if (this.potionTotal() < this.potionCap()) s.potions[p.data.potion]++; }
+      if (p.kind === 'forge') { const item = { uid: s.nextUid++, kind: p.data.equip, tier: p.data.tier }; s.items.push(item); this.equip(p.heroId, item.uid); }
+      const d = D.PROPOSALS[p.kind].trust;
+      h.trust = clampTrust(h.trust + d);
+      s.proposals.splice(s.proposals.findIndex(x => x.id === pid), 1);
+      this.save();
+      return { ok: true, accepted: true, trust: d, cost, detail };
+    },
 
     // ---------- 英雄 ----------
     owned(id) { return this.state.heroes[id] || null; },
@@ -241,7 +396,6 @@
     stats(id) { return E.heroStats(D.heroById[id], this.owned(id)); },
     power(id) { return E.power(this.stats(id)); },
     trustTier(id) { return E.trustTier(this.owned(id).trust); },
-    canTalk(id) { const h = this.owned(id); return !!h && h.talked < this.state.stats.battles; },
 
     ownedList() {
       return Object.keys(this.state.heroes).sort((a, b) => {
@@ -361,19 +515,6 @@
       return { ok: true, star: h.star, newTrait, cost: info.cost, memory };
     },
 
-    // ---------- 信頼度・会話 ----------
-    talk(id) {
-      const h = this.owned(id);
-      if (!this.canTalk(id)) return { ok: false };
-      const before = E.trustTier(h.trust);
-      h.trust = clampTrust(h.trust + 6);
-      h.talked = this.state.stats.battles;
-      const tier = E.trustTier(h.trust);
-      const lines = D.TALK[D.heroById[id].pers][D.TRUST_TIERS[tier].talk];
-      this.save();
-      return { ok: true, line: lines[Math.floor(this.rng() * lines.length)], tierUp: tier > before, tier, trust: h.trust };
-    },
-
     // ---------- 送り出す（特性の継承・合成） ----------
     /** 特性を受け継いだら receiver の特性がどうなるかを返す */
     inheritPreview(receiverId, trait) {
@@ -388,7 +529,8 @@
       return { mode: 'replace', id: trait.id, lv: trait.lv, replaced: low.id, replacedLv: low.lv };
     },
 
-    inheritCost(trait) { return 200 * trait.lv; },
+    canFuse() { return this.buildingLv('fusion') >= 1; },
+    inheritCost(trait) { return Math.round(200 * trait.lv * (D.FUSION_COST[this.buildingLv('fusion')] || 1) / 10) * 10; },
     farewellShards(id) { return D.FAREWELL_SHARDS[D.heroById[id].rarity] * this.owned(id).star; },
 
     /** 英雄を送り出す。receiverId があれば、traitIndex の特性を受け継がせる */
@@ -402,6 +544,7 @@
         const r = this.owned(receiverId);
         const trait = h.traits[traitIndex || 0];
         if (!r || receiverId === id || !trait) return { ok: false, reason: 'bad' };
+        if (!this.canFuse()) return { ok: false, reason: 'fusion' };
         const cost = this.inheritCost(trait);
         if (s.gold < cost) return { ok: false, reason: 'gold', cost };
         s.gold -= cost;
@@ -414,6 +557,8 @@
       }
       const shards = this.farewellShards(id);
       s.shards += shards;
+      // 送り出す英雄の装備は倉庫に戻る
+      for (const k of Object.keys(D.EQUIP_KINDS)) if (h.equip[k]) s.items.push({ uid: s.nextUid++, kind: k, tier: h.equip[k] });
       this.removeHero(id);
       s.stats.farewells++;
       this.save();
@@ -425,6 +570,7 @@
       delete s.heroes[id];
       delete s.rows[id];
       delete s.heroTactics[id];
+      s.proposals = s.proposals.filter(p => p.heroId !== id);
       s.party = s.party.map(x => (x === id ? null : x));
     },
 
@@ -507,9 +653,12 @@
      * 戦闘の結果を反映して、報酬の内訳を返す。
      * fallenIds の英雄は永久に失われる。
      */
-    applyBattleResult(fi, win, partyIds, fallenIds, reason) {
+    applyBattleResult(fi, win, partyIds, fallenIds, reason, extra) {
       const s = this.state;
       fallenIds = fallenIds || [];
+      extra = extra || {};
+      // 使った薬
+      for (const [k, n] of Object.entries(extra.potionsUsed || {})) if (s.potions[k] != null) s.potions[k] = Math.max(0, s.potions[k] - n);
       s.stats.battles++;
       const survivors = partyIds.filter(id => !fallenIds.includes(id) && s.heroes[id]);
       const exp = Math.round(floorExp(fi) * (win ? 1 : 0.3));
@@ -554,6 +703,9 @@
         trust[id] = (trust[id] || 0) + (h.trust - before);
       };
       for (const id of survivors) change(id, win ? 4 : reason === 'retreat' ? -1 : -2);
+      for (const [id, d] of Object.entries(extra.trustDelta || {})) change(id, d);      // 戦闘中の提案への答え
+      const mvp = extra.mvp && s.heroes[extra.mvp] ? extra.mvp : null;
+      if (mvp && win) change(mvp, 3);
       if (fallen.length) {
         for (const id of Object.keys(s.heroes)) {
           const inParty = survivors.includes(id);
@@ -562,19 +714,21 @@
         }
       }
 
-      // 世界を救った（ボスの階を初めてクリア）: その世界から来た英雄は信頼度が上がる
-      let savedWorld = null;
-      if (win && firstClear && (fi + 1) % D.FLOORS_PER_WORLD === 0) {
-        const w = D.worldOfFloor(fi);
-        const natives = Object.keys(s.heroes).filter(id => D.heroById[id].world === w.id);
+      // 区域のボスを初めて倒した: その地方の出身の英雄は信頼度が上がる。100階で世界を救う
+      let freedZone = null;
+      let worldSaved = false;
+      if (win && firstClear && isBossFloor(fi)) {
+        const z = D.zoneOfFloor(fi);
+        const natives = z.land ? Object.keys(s.heroes).filter(id => D.heroById[id].land === z.land) : [];
         for (const id of natives) change(id, 10);
-        savedWorld = { id: w.id, name: w.name, natives };
+        freedZone = { name: z.name, land: z.land, natives };
+        if (fi + 1 >= D.FLOORS.length && !s.worldSaved) { s.worldSaved = true; worldSaved = true; }
       }
 
       const levelUps = [];
       for (const id of survivors) {
         const before = this.owned(id).lv;
-        const up = this.gainExp(id, exp);
+        const up = this.gainExp(id, id === mvp && win ? Math.round(exp * 1.2) : exp);
         if (up > 0) levelUps.push({ id, from: before, to: this.owned(id).lv });
       }
       // 訓練所: 編成に入っていない英雄も経験値をもらう
@@ -590,14 +744,16 @@
         }
       }
       const newcomer = this.ensureSomeone();
+      const proposal = this.maybePropose();
       this.save();
-      return { win, reason: reason || null, exp, gold, gems, shards, firstClear, levelUps, fallen, trust, newcomer, savedWorld, trainExp: trained.length ? trainExp : 0, trained };
+      return { win, reason: reason || null, exp, gold, gems, shards, firstClear, levelUps, fallen, trust, newcomer, freedZone, worldSaved, mvp,
+        trainExp: trained.length ? trainExp : 0, trained, proposal };
     },
   };
 
   const api = {
     Game, expToNext, floorExp, floorGold, firstClearGems, firstClearShards, repeatShards, traitSlots,
-    newState, newOwned, sanitize, SAVE_KEY, rollDifficulty,
+    newState, newOwned, sanitize, SAVE_KEY, rollDifficulty, isBossFloor,
   };
   if (isNode) module.exports = api;
   else root.GameCore = api;

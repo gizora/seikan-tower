@@ -40,10 +40,12 @@
     const g = (1 + 0.07 * (owned.lv - 1)) * star.mult;
     const tb = 1 + trustBonus(owned.trust == null ? 50 : owned.trust);
     const tr = owned.traits || [];
+    const eq = owned.equip || {};
+    const wt = D.EQUIP_TIERS[eq.weapon || 0], at = D.EQUIP_TIERS[eq.armor || 0];
     return {
-      hp: Math.round(c.hp * g * (1 + traitVal(tr, 'sturdy'))),
-      atk: Math.round(c.atk * g * tb * (1 + traitVal(tr, 'might'))),
-      def: Math.round(c.def * g * tb * (1 + traitVal(tr, 'guard'))),
+      hp: Math.round(c.hp * g * (1 + traitVal(tr, 'sturdy')) * (1 + (at ? at.hp : 0))),
+      atk: Math.round(c.atk * g * tb * (1 + traitVal(tr, 'might')) * (1 + (wt ? wt.atk : 0))),
+      def: Math.round(c.def * g * tb * (1 + traitVal(tr, 'guard')) * (1 + (at ? at.def : 0))),
       spd: Math.round((c.spd + ((owned.star || def.rarity) - 1) * 5) * (1 + traitVal(tr, 'swift'))),
     };
   }
@@ -64,7 +66,7 @@
   }
 
   function makeUnitBase() {
-    return { gauge: 0, cd: 0, guard: false, taunt: 0, defUp: 0, atkUp: 0, alive: true };
+    return { gauge: 0, cd: 0, guard: false, taunt: 0, defUp: 0, atkUp: 0, alive: true, fear: 0, bleed: 0 };
   }
 
   /**
@@ -75,6 +77,7 @@
    *   rng: 0..1 を返す関数（省略時 Math.random）
    *   enemyMult: 敵の HP と攻撃の倍率（世界の難易度）
    *   cmdCost: 命令してから次の命令を出せるまでに必要な行動の数（戦略室で短くなる）
+   *   potions: 持っていく薬 { styptic, calm, heal }（英雄が自分で使う）
    */
   function Battle(opts) {
     this.rng = opts.rng || Math.random;
@@ -88,6 +91,12 @@
     this.enemyMult = opts.enemyMult || 1;
     this.cmdCost = opts.cmdCost || 6;
     this.cmdCharge = this.cmdCost;          // 最初から1回は命令できる
+    this.potions = Object.assign({ styptic: 0, calm: 0, heal: 0 }, opts.potions || {});
+    this.potionsUsed = { styptic: 0, calm: 0, heal: 0 };
+    this.proposal = null;                   // 英雄からの提案（1つだけ）
+    this.proposed = {};
+    this.trustDelta = {};
+    this.notes = [];                        // いまの出来事に添えるメッセージ（状態の変化など）
     this.heroes = opts.party.map((p, i) => {
       const st = heroStats(p.def, p.owned);
       const c = D.CLASSES[p.def.cls];
@@ -102,10 +111,11 @@
         firstGauge: traitVal(traits, 'first'), undying: traitVal(traits, 'undying'), counter: traitVal(traits, 'counter'),
         undyingUsed: false, disobeyed: 0,
         tacOverride: p.tactic || null, order: null,
+        action: 'wait', stats: { dmg: 0, heal: 0, taken: 0, kills: 0, slack: 0, acts: 0 },
       });
     });
     this.enemies = [];
-    this.summary = { deaths: 0, healed: 0, guarded: 0, skills: 0, bossReached: false, lastWave: 0, disobeyed: 0, undying: 0, commands: 0, obeyed: 0 };
+    this.summary = { deaths: 0, healed: 0, guarded: 0, skills: 0, bossReached: false, lastWave: 0, disobeyed: 0, undying: 0, commands: 0, obeyed: 0, slacked: 0, feared: 0, bled: 0 };
   }
 
   Battle.prototype.aliveHeroes = function () { return this.heroes.filter(u => u.alive); };
@@ -148,8 +158,10 @@
     }
     for (const e of this.enemies) e.gauge = this.rng() * 300;
     const boss = this.enemies.find(e => e.boss);
+    this.notes = [];
+    if (boss) for (const h of this.aliveHeroes()) if (h.trust < 45 && this.rng() < 0.35) this.inflict(h, 'fear');
     return {
-      type: 'wave', index: w, total: this.floor.waves.length, enemies: this.enemies, healed, boss: !!boss,
+      type: 'wave', index: w, total: this.floor.waves.length, enemies: this.enemies, healed, boss: !!boss, notes: this.notes,
       text: boss ? `ボス出現！ ${boss.name}が立ちはだかる！` : `ウェーブ ${w + 1}/${this.floor.waves.length} — 敵が現れた！`,
     };
   };
@@ -183,20 +195,129 @@
     }
     if (this.turns >= MAX_TURNS) return this.finish(false, 'timeout');
     this.turns++;
+    let expired = null;
+    if (this.proposal && this.turns > this.proposal.expires) { expired = this.proposal; this.proposal = null; }
     const actor = this.pickActor();
+    this.notes = [];
     // 自分の番が来たら、守りの構えは解け、効果の残り回数が減る
     actor.guard = false;
     if (actor.taunt > 0) actor.taunt--;
     if (actor.defUp > 0) actor.defUp--;
     if (actor.atkUp > 0) actor.atkUp--;
     if (actor.cd > 0) actor.cd--;
-    const ev = actor.side === 'hero' ? this.heroAct(actor) : this.enemyAct(actor);
+    let ev = null;
+    if (actor.side === 'hero') ev = this.heroTurnStart(actor);
+    if (!ev) ev = actor.side === 'hero' ? this.heroAct(actor) : this.enemyAct(actor);
+    if (actor.side === 'hero') {
+      actor.stats.acts++;
+      actor.action = !actor.alive ? 'down' : ({ attack: 'attack', skill: actor.healer && ev.hits && ev.hits.some(h => h.heal) ? 'heal' : 'skill', heal: 'heal', guard: 'guard', slack: 'slack', freeze: 'freeze' })[ev.kind] || 'wait';
+      if (actor.fear > 0 && ev.kind !== 'bleedout') actor.fear--;
+      const p = this.maybePropose(actor);
+      if (p) ev.proposal = p;
+    }
+    for (const h of this.heroes) if (!h.alive) h.action = 'down';
     if (this.cmdCharge < this.cmdCost) this.cmdCharge++;
     ev.type = 'act';
     ev.actor = actor.id;
     ev.side = actor.side;
+    ev.notes = (ev.notes || []).concat(this.notes);
+    if (expired) ev.proposalExpired = expired;
     return ev;
   };
+
+  // ---------- 英雄の状態（恐怖・出血） ----------
+  Battle.prototype.note = function (text, kind, unit) { this.notes.push({ text, kind: kind || 'info', unit: unit || null }); };
+
+  Battle.prototype.inflict = function (u, key) {
+    if (!u.alive || u.side !== 'hero') return;
+    const st = D.STATUS[key];
+    const fresh = !(u[key] > 0);
+    u[key] = st.turns;
+    if (fresh) {
+      if (key === 'fear') this.summary.feared++;
+      if (key === 'bleed') this.summary.bled++;
+      this.note(st.msg.replace('{n}', u.name), key, u.id);
+    }
+  };
+
+  /** 仲間が倒れたとき、ほかの英雄は恐怖することがある */
+  Battle.prototype.fearOnDeath = function (dead) {
+    for (const h of this.aliveHeroes()) {
+      if (h === dead) continue;
+      let p = 0.22 + (h.pers === 'careful' || h.pers === 'whimsical' ? 0.15 : 0) - (h.pers === 'brave' ? 0.15 : 0) + (h.trust < 45 ? 0.1 : 0);
+      if (this.rng() < p) this.inflict(h, 'fear');
+    }
+  };
+
+  /** 英雄の番の始まり: 薬を使い、出血で HP が減る */
+  Battle.prototype.heroTurnStart = function (u) {
+    const use = (key) => {
+      if (this.potions[key] <= 0) return false;
+      this.potions[key]--;
+      this.potionsUsed[key]++;
+      this.note(`${u.name}が${D.POTIONS[key].name}を使った`, 'potion', u.id);
+      return true;
+    };
+    if (u.bleed > 0 && use('styptic')) u.bleed = 0;
+    if (u.fear > 0 && use('calm')) u.fear = 0;
+    if (u.hp / u.maxHp < 0.3 && use('heal')) { const amt = Math.min(u.maxHp - u.hp, Math.round(u.maxHp * 0.4)); u.hp += amt; this.notes[this.notes.length - 1].heal = amt; }
+    if (u.bleed > 0) {
+      u.bleed--;
+      const amt = Math.max(1, Math.round(u.maxHp * D.STATUS.bleed.dmg));
+      u.hp = Math.max(0, u.hp - amt);
+      u.stats.taken += amt;
+      if (u.hp === 0) {
+        u.alive = false;
+        this.summary.deaths++;
+        this.fearOnDeath(u);
+        return { kind: 'bleedout', label: '出血', hits: [{ id: u.id, amount: amt, dead: true, bleed: true }], text: `${u.name}が出血で倒れた` };
+      }
+      u.bleedTick = amt;
+    } else u.bleedTick = 0;
+    return null;
+  };
+
+  // ---------- 英雄からの提案（戦闘中） ----------
+  Battle.prototype.maybePropose = function (u) {
+    if (this.proposal || !u.alive || this.state !== 'running') return null;
+    const T = this.tactics;
+    const allies = this.aliveHeroes();
+    const bossPresent = this.aliveEnemies().some(e => e.boss);
+    let kind = null;
+    if (!this.proposed.retreat && T.retreat === 'never' && (u.pers === 'careful' || u.pers === 'caring') &&
+        (this.summary.deaths > 0 || allies.some(a => a.hp / a.maxHp < 0.25))) kind = 'retreat';
+    else if (!this.proposed.defend && T.stance !== 'defend' && u.pers !== 'brave' && (u.hp / u.maxHp < 0.45 || this.summary.deaths > 0)) kind = 'defend';
+    else if (!this.proposed.focus && bossPresent && (u.pers === 'brave' || u.pers === 'loyal') && !allies.some(a => a.order && a.order.type === 'target')) kind = 'focus';
+    if (!kind || this.rng() > 0.6) return null;
+    this.proposed[kind] = true;
+    this.proposal = { kind, unit: u.id, heroId: u.heroId, expires: this.turns + 8 };
+    return this.proposal;
+  };
+
+  /** 提案に答える。accept=true なら受け入れる */
+  Battle.prototype.answerProposal = function (accept) {
+    const p = this.proposal;
+    if (!p || this.state !== 'running') return { ok: false };
+    this.proposal = null;
+    const u = this.unitById(p.unit);
+    const d = accept ? 2 : -1;
+    u.trust = Math.max(0, Math.min(100, u.trust + d));
+    this.trustDelta[u.heroId] = (this.trustDelta[u.heroId] || 0) + d;
+    if (!accept) return { ok: true, accepted: false, kind: p.kind };
+    if (p.kind === 'retreat') return { ok: true, accepted: true, kind: p.kind, end: this.finish(false, 'retreat') };
+    if (p.kind === 'defend') this.tactics.stance = 'defend';
+    if (p.kind === 'focus') {
+      const boss = this.aliveEnemies().find(e => e.boss);
+      if (boss) for (const h of this.aliveHeroes()) h.order = { type: 'target', targetId: boss.id, left: 4 };
+    }
+    return { ok: true, accepted: true, kind: p.kind };
+  };
+
+  /** 活躍の点数（MVP を決める） */
+  function score(h) {
+    const st = h.stats;
+    return st.dmg + st.heal * 1.2 + st.taken * 0.35 + st.kills * 40 - st.slack * 60 + (h.alive ? 50 : 0);
+  }
 
   // ---------- マスターの命令（戦闘中に英雄をタップして出す） ----------
   Battle.prototype.canCommand = function () {
@@ -216,16 +337,15 @@
     if (!['target', 'skill', 'guard'].includes(type)) return { ok: false, reason: 'type' };
     this.cmdCharge = 0;
     this.summary.commands++;
-    const lines = D.ORDER_LINES[u.pers];
     if (this.rng() < disobeyChance(u.trust)) {
       u.disobeyed++;
       this.summary.disobeyed++;
-      return { ok: true, obeyed: false, unit: u.id, speech: this.randomOf(lines[1]) };
+      return { ok: true, obeyed: false, unit: u.id, text: `${u.name}は命令に従わなかった` };
     }
     this.summary.obeyed++;
     u.order = { type, targetId: targetId || null, left: 4 };
     if (type === 'guard') u.guard = true;          // 守りはすぐに固める
-    return { ok: true, obeyed: true, unit: u.id, speech: this.randomOf(lines[0]) };
+    return { ok: true, obeyed: true, unit: u.id, text: `${u.name}が命令「${D.ORDERS[type].name}」に従う` };
   };
 
   /** マスターが撤退を選んだとき */
@@ -236,15 +356,21 @@
 
   Battle.prototype.finish = function (win, reason) {
     this.state = 'done';
-    this.result = { win, reason: reason || null, fallen: this.fallenHeroIds() };
-    return { type: 'end', win, reason: reason || null, fallen: this.result.fallen };
+    this.proposal = null;
+    let mvp = null;
+    for (const h of this.heroes) if (!mvp || score(h) > score(mvp)) mvp = h;
+    const heroStats = this.heroes.map(h => ({ heroId: h.heroId, alive: h.alive, score: Math.round(score(h)), ...h.stats }));
+    this.result = { win, reason: reason || null, fallen: this.fallenHeroIds(), mvp: mvp ? mvp.heroId : null, heroStats,
+      trustDelta: this.trustDelta, potionsUsed: this.potionsUsed };
+    return Object.assign({ type: 'end' }, this.result);
   };
 
   // ---------- ダメージと回復 ----------
   Battle.prototype.damage = function (a, t, mult, forceCrit, noCounter) {
     const T = this.tactics;
-    const atkMul = (a.side === 'hero' ? STANCE[T.stance].atk : 1) * (a.atkUp > 0 ? 1.25 : 1);
-    const defMul = (t.side === 'hero' ? STANCE[T.stance].def : 1) * (t.guard ? 2 : 1) * (t.defUp > 0 ? 1.35 : 1);
+    const fearMul = D.STATUS.fear.mult;
+    const atkMul = (a.side === 'hero' ? STANCE[T.stance].atk : 1) * (a.atkUp > 0 ? 1.25 : 1) * (a.fear > 0 ? fearMul : 1);
+    const defMul = (t.side === 'hero' ? STANCE[T.stance].def : 1) * (t.guard ? 2 : 1) * (t.defUp > 0 ? 1.35 : 1) * (t.fear > 0 ? fearMul : 1);
     const atk = a.atk * atkMul;
     const def = t.def * defMul;
     let dmg = atk * mult * 50 / (50 + def) * (0.9 + 0.2 * this.rng());
@@ -268,10 +394,19 @@
       res.undying = true;
       this.summary.undying++;
     }
+    if (a.side === 'hero') a.stats.dmg += amount;
+    if (t.side === 'hero') t.stats.taken += amount;
     if (t.hp === 0) {
       t.alive = false;
       res.dead = true;
-      if (t.side === 'hero') this.summary.deaths++;
+      if (a.side === 'hero') a.stats.kills++;
+      if (t.side === 'hero') { this.summary.deaths++; this.fearOnDeath(t); }
+    }
+    // 敵の攻撃で出血・恐怖
+    if (a.side === 'enemy' && t.side === 'hero' && t.alive && amount > 0) {
+      const tpl = D.ENEMIES[a.key];
+      if ((tpl.bleed && this.rng() < tpl.bleed) || (crit && this.rng() < 0.5)) this.inflict(t, 'bleed');
+      if (tpl.fear && this.rng() < tpl.fear) this.inflict(t, 'fear');
     }
     // 吸血
     if (a.side === 'hero' && a.drain > 0 && a.alive && amount > 0) {
@@ -290,6 +425,7 @@
     const amount = Math.min(t.maxHp - t.hp, raw);
     t.hp += amount;
     this.summary.healed += amount;
+    if (a.stats) a.stats.heal += amount;
     return { id: t.id, amount, heal: true };
   };
 
@@ -319,8 +455,19 @@
   Battle.prototype.heroAct = function (u) {
     const T = this.tactics;
     const order = u.order;
+    // 恐怖で立ちすくむ
+    if (u.fear > 0 && !order && this.rng() < 0.25) {
+      return { kind: 'freeze', label: '立ちすくむ', hits: [], text: `${u.name}は恐怖で立ちすくんでいる` };
+    }
     // 信頼度が低いと、作戦を無視して自分の考えで動く（命令を受けている間は、命令に従う）
     const disobey = !order && this.rng() < disobeyChance(u.trust);
+    if (disobey) {
+      const slackP = u.trust < 25 ? 0.6 : u.pers === 'whimsical' ? 0.4 : 0.15;
+      if (this.rng() < slackP) {
+        u.disobeyed++; this.summary.disobeyed++; this.summary.slacked++; u.stats.slack++;
+        return { kind: 'slack', label: 'サボり', hits: [], disobey: true, text: `${u.name}がサボっている` };
+      }
+    }
     const tac = disobey ? { target: 'auto', healLine: 0.5, skill: 'now' } : Object.assign({}, T, u.tacOverride || {});
     if (disobey) { u.disobeyed++; this.summary.disobeyed++; }
     const disobeySpeech = disobey && u.disobeyed === 1 ? '悪いけど、好きにやらせてもらう' : null;
@@ -482,7 +629,7 @@
       if (tpl.freeze) {
         for (const f of foes()) f.gauge -= tpl.freeze;
         ev.frozen = foes().map(f => f.id);
-        ev.text += ' 英雄たちは凍えて動きが鈍った！';
+        this.note(D.STATUS.cold.msg.replace('{n}', '英雄たち'), 'cold');
       }
     } else {
       const t1 = pick();

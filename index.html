@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#16112a">
-  <meta name="description" content="滅んだ世界から来た英雄を集め、作戦と命令で導いて塔に挑むオート戦闘ゲーム">
+  <meta name="theme-color" content="#120e22">
+  <meta name="description" content="記憶をなくした英雄たちを導き、100階の塔を制覇して世界を救うオート戦闘ゲーム">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -17,7 +17,7 @@
 <body>
   <div id="app">
     <header class="topbar">
-      <h1 class="brand"><span class="brand-star" aria-hidden="true">✦</span>星喚の塔</h1>
+      <h1 class="brand"><span aria-hidden="true">✦</span>星喚の塔</h1>
       <div class="wallet">
         <span class="coin" title="召喚石"><span aria-hidden="true">💎</span><span class="sr-only">召喚石</span><b id="gems">0</b></span>
         <span class="coin" title="金貨"><span aria-hidden="true">🪙</span><span class="sr-only">金貨</span><b id="gold">0</b></span>
@@ -30,44 +30,40 @@
       <section id="tab-tower" class="tab" aria-label="塔" hidden></section>
       <section id="tab-gacha" class="tab" aria-label="召喚" hidden></section>
       <section id="tab-heroes" class="tab" aria-label="英雄" hidden></section>
-      <section id="tab-party" class="tab" aria-label="編成と作戦" hidden></section>
+      <section id="tab-party" class="tab" aria-label="編成" hidden></section>
     </main>
 
     <nav class="tabbar" aria-label="メニュー">
-      <button type="button" class="tabbtn" data-tab="home" aria-current="page"><span aria-hidden="true">🏠</span>待機所</button>
+      <button type="button" class="tabbtn" data-tab="home" aria-current="page"><span aria-hidden="true">🏰</span>待機所</button>
       <button type="button" class="tabbtn" data-tab="tower"><span aria-hidden="true">🗼</span>塔</button>
       <button type="button" class="tabbtn" data-tab="gacha"><span aria-hidden="true">🔮</span>召喚</button>
-      <button type="button" class="tabbtn" data-tab="heroes"><span aria-hidden="true">📖</span>英雄</button>
+      <button type="button" class="tabbtn" data-tab="heroes"><span aria-hidden="true">👥</span>英雄</button>
       <button type="button" class="tabbtn" data-tab="party"><span aria-hidden="true">📜</span>編成</button>
     </nav>
 
-    <!-- 戦闘画面 -->
+    <!-- 戦闘（マスターが見る塔の中の映像） -->
     <div id="battle" class="battle" hidden>
-      <div class="battle-head">
-        <div class="battle-title"><b id="b-floor">1階</b><span id="b-wave">ウェーブ 1/2</span></div>
-        <div class="battle-tools">
-          <button type="button" id="b-speed" class="chip" aria-label="戦闘の速さ">×2</button>
-          <button type="button" id="b-tactics" class="chip chip-gold">作戦</button>
+      <div class="b-top">
+        <b id="b-floor">1階</b><span id="b-wave"></span>
+        <div id="b-gauge" class="gauge" role="status"></div>
+        <div class="b-tools">
+          <button type="button" id="b-speed" class="chip">×2</button>
+          <button type="button" id="b-tactics" class="chip">作戦</button>
           <button type="button" id="b-retreat" class="chip chip-dim">撤退</button>
         </div>
       </div>
-      <div class="gauge-row"><div id="b-gauge" class="gauge" role="status"></div><span class="gauge-hint">英雄をタップで命令</span></div>
-      <div class="field">
-        <div id="b-banner" class="banner" aria-live="polite"></div>
-        <div id="b-cmd" class="cmd-panel" hidden></div>
-        <div id="b-enemies" class="side enemies"></div>
-        <div class="vs-line" aria-hidden="true"></div>
-        <div class="side heroes">
-          <div class="rowlabel">前衛</div>
-          <div id="b-front" class="row"></div>
-          <div class="rowlabel">後衛</div>
-          <div id="b-back" class="row"></div>
+      <div class="b-main">
+        <div class="b-stage">
+          <canvas id="b-field" class="b-field" role="img" aria-label="戦闘の映像。英雄や敵をタップできる"></canvas>
+          <div id="b-banner" class="banner" aria-live="polite"></div>
+          <div id="b-proposal" class="b-proposal" hidden></div>
+          <div id="b-cmd" class="b-cmd" hidden></div>
         </div>
+        <div id="b-list" class="b-list" aria-label="英雄の様子"></div>
       </div>
-      <ol id="b-log" class="log"></ol>
+      <ol id="b-log" class="b-log" aria-live="polite"></ol>
     </div>
 
-    <!-- 汎用モーダル -->
     <div id="modal" class="modal" hidden>
       <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div id="modal-body"></div>
@@ -81,6 +77,7 @@
   <script src="js/battle.js"></script>
   <script src="js/sprites.js"></script>
   <script src="js/room.js"></script>
+  <script src="js/field.js"></script>
   <script src="js/game.js"></script>
   <script src="js/ui.js"></script>
 </body>
