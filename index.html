@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#16112a">
-  <meta name="description" content="ガチャで英雄を集め、作戦を決めて塔に挑むオート戦闘ゲーム">
+  <meta name="description" content="滅んだ世界から来た英雄を集め、作戦と命令で導いて塔に挑むオート戦闘ゲーム">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -26,7 +26,7 @@
     </header>
 
     <main id="screen">
-      <section id="tab-home" class="tab" aria-label="待機室"></section>
+      <section id="tab-home" class="tab" aria-label="待機所"></section>
       <section id="tab-tower" class="tab" aria-label="塔" hidden></section>
       <section id="tab-gacha" class="tab" aria-label="召喚" hidden></section>
       <section id="tab-heroes" class="tab" aria-label="英雄" hidden></section>
@@ -34,7 +34,7 @@
     </main>
 
     <nav class="tabbar" aria-label="メニュー">
-      <button type="button" class="tabbtn" data-tab="home" aria-current="page"><span aria-hidden="true">🏠</span>待機室</button>
+      <button type="button" class="tabbtn" data-tab="home" aria-current="page"><span aria-hidden="true">🏠</span>待機所</button>
       <button type="button" class="tabbtn" data-tab="tower"><span aria-hidden="true">🗼</span>塔</button>
       <button type="button" class="tabbtn" data-tab="gacha"><span aria-hidden="true">🔮</span>召喚</button>
       <button type="button" class="tabbtn" data-tab="heroes"><span aria-hidden="true">📖</span>英雄</button>
@@ -51,8 +51,10 @@
           <button type="button" id="b-retreat" class="chip chip-dim">撤退</button>
         </div>
       </div>
+      <div class="gauge-row"><div id="b-gauge" class="gauge" role="status"></div><span class="gauge-hint">英雄をタップで命令</span></div>
       <div class="field">
         <div id="b-banner" class="banner" aria-live="polite"></div>
+        <div id="b-cmd" class="cmd-panel" hidden></div>
         <div id="b-enemies" class="side enemies"></div>
         <div class="vs-line" aria-hidden="true"></div>
         <div class="side heroes">

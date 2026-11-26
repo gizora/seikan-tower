@@ -3,12 +3,12 @@
   'use strict';
   const D = root.GameData;
   const OUTLINE = '#1a1226';
-  const HW = 18, HH = 22;                     // 英雄の絵の大きさ（ドット）
+  const HW = 24, HH = 48;                     // 英雄の絵の大きさ（ドット）。人の頭身（約6.5頭身）で描く
 
   // ---------- 色の道具 ----------
   function hex(c) { const n = parseInt(c.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
   function toHex(r, g, b) { return '#' + [r, g, b].map(v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join(''); }
-  function shade(c, k) { const [r, g, b] = hex(c); return toHex(r * k, g * k, b * k); }
+  function shade(c, k) { if (!c || c[0] !== '#') return c; const [r, g, b] = hex(c); return toHex(r * k, g * k, b * k); }
 
   function makeGrid(w, h) { return Array.from({ length: h }, () => Array(w).fill(null)); }
 
@@ -28,7 +28,6 @@
       }
     });
   }
-  function dot(grid, x, y, col) { if (y >= 0 && y < grid.length && x >= 0 && x < grid[0].length) grid[y][x] = col; }
 
   /** 塗った部分のまわりに縁取りをつける */
   function outline(grid) {
@@ -43,6 +42,19 @@
     return out;
   }
 
+  /** 右側（光の当たらない側）のふちを少し暗くして立体感を出す */
+  function sideShade(grid, keep) {
+    const h = grid.length, w = grid[0].length;
+    const out = grid.map(r => r.slice());
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const c = grid[y][x];
+      if (!c || keep.has(c)) continue;
+      if (x === w - 1 || !grid[y][x + 1]) out[y][x] = shade(c, 0.76);
+      else if (y > 0 && !grid[y - 1][x]) out[y][x] = shade(c, 1.12);
+    }
+    return out;
+  }
+
   function toCanvas(grid) {
     const c = document.createElement('canvas');
     c.width = grid[0].length;
@@ -52,137 +64,356 @@
     return c;
   }
 
-  // ---------- 英雄（部品を組み合わせて描く） ----------
-  const HEAD = [
-    '.....SSSSSSSS.....',
-    '....SSSSSSSSSS....',
-    '....SSSSSSSSSS....',
-    '....SSESSSSESS....',
-    '....SSESSSSESS....',
-    '....SrSSSSSSrS....',
-    '.....SSSSSSSS.....',
-    '.......SSSS.......',
-  ]; // y6〜13
-
-  const HAIR_SHORT = [
-    '......HHHHHH......',
-    '....HHHHHHHHHH....',
-    '...HHHHHHHHHHHH...',
-    '...HHHHHHHHHHHH...',
-    '...HHHhHHHHhHHH...',
-    '...HH.h....h.HH...',
-    '...H..........H...',
-    '...H..........H...',
-  ]; // y3〜10
-  const HAIR = {
-    short: [[3, HAIR_SHORT]],
-    messy: [[2, ['.......H..H.......']], [3, HAIR_SHORT]],
-    spiky: [[1, ['.....H..H..H......', '.....HH.HH.HH.....']], [3, HAIR_SHORT]],
-    long: [[3, HAIR_SHORT], [11, Array(4).fill('...HH........HH...').concat(['...H..........H...'])]],
-    bob: [[3, HAIR_SHORT], [11, ['...HH........HH...', '...hh........hh...']]],
-    ponytail: [[3, HAIR_SHORT], [5, ['...............HH.', '...............HH.', '...............HH.', '...............Hh.', '................h.', '................h.']]],
-    twin: [[3, HAIR_SHORT], [8, ['.HH............HH.', '.HH............HH.', '.Hh............hH.', '.hh............hh.', '..h............h..']]],
-    bald: [[8, ['...H..........H...', '...H..........H...']]],
+  // ---------- 英雄（人の頭身。部品を順に描き重ねる） ----------
+  const BUILD = {
+    slim:   { sl: 8, sr: 15, tl: 9, tr: 14, al: 7, ar: 16 },
+    normal: { sl: 7, sr: 16, tl: 8, tr: 15, al: 6, ar: 17 },
+    broad:  { sl: 6, sr: 17, tl: 7, tr: 16, al: 5, ar: 18 },
   };
+  const WOOD = '#7a4e2a', WOOD_D = '#4e3018', METAL = '#d4dae6', METAL_D = '#8a92a6', GOLD = '#f0c850', CLOTH_W = '#f4f0e8';
 
-  const BODY = {
-    tunic: [
-      '.....oOOOOOOo.....',
-      '....OOOOAAOOOO....',
-      '...SOOOOAAOOOOS...',
-      '....AAAAAAAAAA....',
-      '....OOOOOOOOOO....',
-    ],
-    light: [
-      '.....AAAAAAAA.....',
-      '....OOOOOOOOOO....',
-      '...SOOOOAAOOOOS...',
-      '....AAAAAAAAAA....',
-      '....OOOOOOOOOO....',
-    ],
-    robe: [
-      '.....oOOOOOOo.....',
-      '....OOOOAAOOOO....',
-      '...SOOOOAAOOOOS...',
-      '....OOOOAAOOOO....',
-      '....OOOOAAOOOO....',
-      '...OOOOOAAOOOOO...',
-      '...oOOOOOOOOOOo...',
-    ],
-    armor: [
-      '...MMoOOOOOOoMM...',
-      '...MMMMMMMMMMMM...',
-      '...SMMMMmmMMMMS...',
-      '....AAAAAAAAAA....',
-      '....mmmmmmmmmm....',
-    ],
-  }; // y14〜
-  const LEGS = {
-    stand: ['.....PPP..PPP.....', '.....PPP..PPP.....', '.....BBB..BBB.....'],
-    walk: ['.....PPP..PPP.....', '....PPP....PPP....', '....BBB....BBB....'],
-    robeStand: ['.....BB....BB.....'],
-    robeWalk: ['....BB......BB....'],
-  };
+  /**
+   * look から 24×48 の絵を作る。frame: 0 = 立ち、1 = 歩き
+   * 体の位置（標準の背丈 o=0）: 顔 y7〜12 / 首 y13 / 肩 y14 / 腰 y23 / 脚 y28〜 / 靴 y41〜46
+   */
+  function heroGrid(look, frame) {
+    const g = makeGrid(HW, HH);
+    const o = look.h || 0;                       // 大きいほど背が低い（上半身を下にずらし、脚を短くする）
+    const B = BUILD[look.build] || BUILD.normal;
+    const gear = look.gear || [];
+    const has = (k) => gear.includes(k);
+    const S = look.skin, Sd = shade(look.skin, 0.84);
+    const H = look.hair, Hd = shade(look.hair, 0.74);
+    const C1 = look.c1, C1d = shade(look.c1, 0.74), C2 = look.c2;
+    const P = look.pants, BT = look.boots;
+    const M = look.metal || METAL, Md = look.metal ? shade(look.metal, 0.7) : METAL_D;
+    const T = look.hat || look.c1, Td = shade(look.hat || look.c1, 0.72);
+    const GEM = look.gem || '#ffe27a';
+    const EYE = look.eye || '#2a1d3a';
 
-  const GEAR = {
-    wizardHat: [[0, ['..........tt......', '.........tTT......', '........TTTT......', '.......TTTTTT.....', '......TTTTTTTT....', '..AAAAAAAAAAAAAA..']]],
-    hood: [[3, ['......tttttt......', '....tTTTTTTTTt....', '...tTTTTTTTTTTt...', '...TTTTTTTTTTTT...', '...TT........TT...', '...TT........TT...', '...TT........TT...', '...TT........TT...', '...TT........TT...', '...TT........TT...', '....TT......TT....']]],
-    mask: [[11, ['....TTTTTTTTTT....', '.....TTTTTTTT.....']]],
-    helmet: [[3, ['......MMMMMM......', '....MMMMMMMMMM....', '...MMMMMMMMMMMM...', '...MmmmmmmmmmmM...', '...MM........MM...', '...MM........MM...', '...M..........M...']]],
-    halo: [[0, ['......GGGGGG......', '.....G......G.....', '......GGGGGG......']]],
-    crown: [[1, ['.....G.G..G.G.....', '.....GGGGGGGG.....']]],
-    headband: [[6, ['...AAAAAAAAAAAA...']]],
-    strawHat: [[2, ['......WWWWWW......', '.....WWWWWWWW.....', '...wwwwwwwwwwww...', '.WWWWWWWWWWWWWWWW.']]],
-    elfEars: [[8, ['.S..............S.', '..SS..........SS..']]],
-    mouseEars: [[0, ['..HHH......HHH....', '.HHrHH....HHrHH...', '.HHHH......HHHH...']]],
-    beard: [[11, ['....ZSSSSSSSSZ....', '.....ZZZZZZZZ.....', '......ZZZZZZ......', '.......ZZZZ.......']]],
-  };
-  const BACK_GEAR = {
-    wings: [[11, ['GG..............GG', 'GGG............GGG', '.GGG..........GGG.', '..GG..........GG..', '...G..........G...']]],
-    cape: [[14, Array(6).fill('..X............X..').concat(['..XX..........XX..'])]],
-  };
+    const R = (x, y, w, h, c) => { if (!c) return; for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (j >= 0 && j < HH && i >= 0 && i < HW) g[j][i] = c; };
+    const D1 = (x, y, c) => R(x, y, 1, 1, c);
+    const ROWX = (y, x0, x1, c) => R(x0, y, x1 - x0 + 1, 1, c);
 
-  const WEAPON = {
-    sword: [[15, 7, 'M'], ...[8, 9, 10, 11, 12, 13, 14].flatMap(y => [[15, y, 'M'], [16, y, 'm']]), [14, 15, 'A'], [15, 15, 'A'], [16, 15, 'A'], [17, 15, 'A'], [15, 16, 'W'], [16, 16, 'W']],
-    axe: [...[8, 9, 10, 11, 12, 13, 14, 15, 16, 17].map(y => [15, y, 'W']), [16, 8, 'M'], [17, 8, 'M'], [16, 9, 'M'], [17, 9, 'M'], [16, 10, 'M'], [17, 10, 'm'], [16, 11, 'm']],
-    staff: [...[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].map(y => [15, y, 'W']), [15, 2, 'G'], [14, 3, 'G'], [15, 3, 'G'], [16, 3, 'G'], [15, 4, 'G']],
-    orb: [...[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].map(y => [15, y, 'W']), [15, 2, 'G'], [16, 2, 'G'], [15, 3, 'G'], [16, 3, 'G'], [14, 3, 'G'], [15, 4, 'G']],
-    wand: [[15, 13, 'W'], [15, 14, 'W'], [15, 15, 'W'], [15, 16, 'W'], [15, 11, 'G'], [14, 12, 'G'], [15, 12, 'G'], [16, 12, 'G']],
-    bow: [[16, 9, 'W'], [17, 10, 'W'], [17, 11, 'W'], [17, 12, 'W'], [17, 13, 'W'], [17, 14, 'W'], [17, 15, 'W'], [17, 16, 'W'], [17, 17, 'W'], [16, 18, 'W'], ...[10, 11, 12, 13, 14, 15, 16, 17].map(y => [15, y, 'C'])],
-    daggers: [[15, 13, 'M'], [15, 14, 'M'], [15, 15, 'M'], [2, 13, 'M'], [2, 14, 'M'], [2, 15, 'M']],
-    fork: [...[6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21].map(y => [15, y, 'W']), [14, 3, 'M'], [16, 3, 'M'], [14, 4, 'M'], [15, 4, 'M'], [16, 4, 'M'], [15, 5, 'M']],
-    shield: [[15, 7, 'M'], ...[8, 9, 10, 11, 12, 13, 14].flatMap(y => [[15, y, 'M'], [16, y, 'm']]), [14, 15, 'A'], [15, 15, 'A'], [16, 15, 'A'], [15, 16, 'W'],
-      ...[14, 15, 16, 17, 18].flatMap(y => [0, 1, 2, 3].map(x => [x, y, (y === 14 || y === 18 || x === 0 || x === 3) ? 'M' : 'A']))],
-  };
+    const y0 = 7 + o;                            // 顔のいちばん上
+    const sh = 14 + o;                           // 肩
+    const waist = 23 + o;
+    const hipEnd = 27 + o;
+    const legTop = 28 + o;
+    const bootTop = 41;
+    const feet = 46;
+    const hy = 26 + o;                           // 手の高さ
+    const knee = Math.round((legTop + bootTop) / 2);
+    const walk = frame === 1;
+    const top = look.top || 'tunic';
+    const longSkirt = top === 'robe';
+    const skirt = top === 'robe' || top === 'dress';
 
-  function heroPalette(look) {
-    const p = {
-      S: look.skin, s: shade(look.skin, 0.85), E: '#2a1d3a', r: '#f2a0a0',
-      H: look.hair, h: shade(look.hair, 0.75),
-      O: look.outfit, o: shade(look.outfit, 0.78), A: look.accent,
-      P: look.pants, B: look.boots,
-      M: '#d0d6e2', m: '#8a92a6', W: '#8a5a32', w: '#5e3b1f', C: '#f4f0e8',
-      G: look.gem || '#ffe27a', T: look.hat || look.outfit, t: shade(look.hat || look.outfit, 0.78),
-      X: look.cape || '#b0303a', Z: look.beard || look.hair,
+    // ===== 1. 背中のもの（マント・羽・後ろ髪・矢筒） =====
+    if (has('cape')) {
+      const X = look.cape || '#a82a34';
+      for (let y = sh; y <= 43; y++) {
+        const k = Math.floor((y - sh) / 9);
+        ROWX(y, B.sl - 1 - k, B.sr + 1 + k, y >= 41 ? shade(X, 0.8) : X);
+      }
+    }
+    if (has('wings')) {
+      const Wc = '#d8fbff', Wd = '#8fd0e0';
+      const wing = ['..WW', '.WWW', 'WWWd', 'WWWd', 'WWdd', '.Wdd', '..Wd', '.WWd', 'WWWd', '.WWd', '..W.'];
+      paint(g, wing.map(r => r), sh - 3, { W: Wc, d: Wd }, B.al - 5);
+      paint(g, wing.map(r => r.split('').reverse().join('')), sh - 3, { W: Wc, d: Wd }, B.ar + 2);
+    }
+    if (look.style === 'long') R(8, y0, 8, 12, Hd);
+    if (look.style === 'bob') R(8, y0 + 3, 8, 4, Hd);
+    if (look.style === 'ponytail') { R(15, y0 - 1, 2, 3, H); R(16, y0 + 2, 2, 9, H); R(17, y0 + 6, 1, 6, Hd); }
+    if (look.weapon === 'bow') {                 // 矢筒
+      R(B.sr - 1, sh - 3, 2, 12, '#7a4a28');
+      D1(B.sr - 1, sh - 4, CLOTH_W); D1(B.sr, sh - 5, '#c83a3a'); D1(B.sr, sh - 4, CLOTH_W);
+    }
+
+    // ===== 2. 脚と靴 =====
+    const lx0 = B.tl, lx1 = 11, rx0 = 12, rx1 = B.tr;
+    for (let y = legTop; y < bootTop; y++) {
+      const off = walk && y >= knee ? 1 : 0;
+      ROWX(y, lx0 - off, lx1 - off, P);
+      ROWX(y, rx0 + off, rx1 + off, P);
+      D1(lx1 - off, y, shade(P, 0.8));
+    }
+    for (let y = bootTop; y <= feet; y++) {
+      const off = walk ? 1 : 0;
+      ROWX(y, lx0 - off - (y === feet ? 1 : 0), lx1 - off, BT);
+      ROWX(y, rx0 + off, rx1 + off + (y === feet ? 1 : 0), BT);
+    }
+    R(lx0 - (walk ? 1 : 0), bootTop, lx1 - lx0 + 1, 1, shade(BT, 1.25));   // 靴の折り返し
+    R(rx0 + (walk ? 1 : 0), bootTop, rx1 - rx0 + 1, 1, shade(BT, 1.25));
+
+    // ===== 3. 胴と服 =====
+    const torso = (c, from, to) => {
+      for (let y = from; y <= to; y++) {
+        if (y === sh) ROWX(y, B.sl + 1, B.sr - 1, c);
+        else if (y <= sh + 3) ROWX(y, B.sl, B.sr, c);
+        else ROWX(y, B.tl, B.tr, c);
+      }
     };
-    return p;
+    const skirtRows = (c, from, to, trim) => {
+      for (let y = from; y <= to; y++) {
+        const k = Math.floor((y - from) / 4);
+        ROWX(y, B.tl - k, B.tr + k, c);
+      }
+      if (trim) ROWX(to, B.tl - Math.floor((to - from) / 4), B.tr + Math.floor((to - from) / 4), trim);
+    };
+    let sleeve = C1, forearm = C1, cuff = C2;
+    if (top === 'tunic') {
+      torso(C1, sh, hipEnd);
+      ROWX(waist, B.tl, B.tr, C2); D1(12, waist, GOLD);
+      D1(11, sh, S); D1(12, sh, S); D1(11, sh + 1, Sd);
+    } else if (top === 'coat') {
+      torso(C1, sh, hipEnd);
+      const tailEnd = Math.min(39, hipEnd + 11);
+      for (let y = hipEnd + 1; y <= tailEnd; y++) {
+        const k = Math.floor((y - hipEnd) / 5);
+        ROWX(y, B.tl - k, 10, C1); ROWX(y, 13, B.tr + k, C1);
+        D1(10, y, C2); D1(13, y, C2);
+      }
+      for (let y = sh + 1; y <= hipEnd; y++) { D1(11, y, C1d); }
+      ROWX(waist, B.tl, B.tr, shade(C1, 0.55)); D1(12, waist, C2);
+      D1(10, sh - 1, C1); D1(13, sh - 1, C1);   // 高いえり
+      for (let y = sh + 1; y < waist; y += 3) D1(12, y, C2);
+    } else if (top === 'armor') {
+      torso(M, sh, waist);
+      for (let y = sh + 1; y < waist; y++) D1(B.tr, y, Md);
+      ROWX(sh + 4, B.tl + 1, B.tr - 1, Md);
+      R(10, sh + 3, 4, hipEnd + 6 - (sh + 3), C1);          // 胸当ての上の布（タバード）
+      for (let y = sh + 3; y <= hipEnd + 5; y++) { D1(10, y, C2); D1(13, y, C2); }
+      ROWX(waist, B.tl, B.tr, '#4a3424'); D1(12, waist, GOLD);
+      R(B.tl, waist + 1, B.tr - B.tl + 1, hipEnd - waist, Md);
+      R(10, waist + 1, 4, hipEnd + 6 - waist - 1, C1);
+      R(B.sl - 1, sh - 1, 4, 3, M); R(B.sr - 2, sh - 1, 4, 3, M);   // 肩当て
+      ROWX(sh + 1, B.sl - 1, B.sl + 2, Md); ROWX(sh + 1, B.sr - 2, B.sr + 1, Md);
+      sleeve = M; forearm = Md; cuff = M;
+    } else if (top === 'robe') {
+      torso(C1, sh, waist);
+      ROWX(waist, B.tl, B.tr, C2);
+      skirtRows(C1, waist + 1, 45, C2);
+      for (let y = sh + 1; y <= 45; y++) if (y !== waist) { D1(11, y, C2); }
+      D1(11, sh, S); D1(12, sh, S);
+    } else if (top === 'dress') {
+      torso(C1, sh, waist);
+      ROWX(waist, B.tl, B.tr, C2); D1(11, waist + 1, C2); D1(12, waist + 1, C2);
+      skirtRows(C1, waist + 1, Math.min(41, waist + 18), C2);
+      D1(11, sh, S); D1(12, sh, S);
+      sleeve = C1; forearm = S; cuff = C2;
+    } else if (top === 'leather') {
+      torso(C1, sh, hipEnd);
+      for (let i = 0; i <= waist - sh; i++) D1(B.sl + 1 + Math.round(i * (B.tr - B.sl - 1) / (waist - sh)), sh + i, C2);
+      ROWX(waist, B.tl, B.tr, C2); D1(12, waist, GOLD);
+      R(B.tl, waist + 1, B.tr - B.tl + 1, hipEnd - waist, P);
+      sleeve = C1; forearm = S; cuff = C2;
+    } else if (top === 'vest') {
+      torso(S, sh, waist);
+      for (let y = sh; y <= waist; y++) { ROWX(y, y <= sh + 3 ? B.sl : B.tl, (y <= sh + 3 ? B.sl : B.tl) + 2, C1); ROWX(y, (y <= sh + 3 ? B.sr : B.tr) - 2, y <= sh + 3 ? B.sr : B.tr, C1); }
+      D1(11, sh + 5, Sd); D1(12, sh + 5, Sd); D1(11, sh + 8, Sd); D1(12, sh + 8, Sd);
+      ROWX(waist + 1, B.tl, B.tr, C2);
+      R(B.tl, waist + 2, B.tr - B.tl + 1, hipEnd - waist - 1, P);
+      sleeve = S; forearm = S; cuff = C2;
+    } else if (top === 'overalls') {
+      torso(C2, sh, sh + 3);
+      torso(C1, sh + 4, hipEnd);
+      for (let y = sh; y <= sh + 3; y++) { D1(B.tl + 1, y, C1); D1(B.tr - 1, y, C1); }
+      D1(B.tl + 1, sh + 4, GOLD); D1(B.tr - 1, sh + 4, GOLD);
+      sleeve = C2; forearm = S; cuff = C2;
+    }
+
+    // ===== 4. 腕と手 =====
+    const armTop = sh + 1, armEnd = hy - 1;
+    for (let y = armTop; y <= armEnd; y++) {
+      const fore = y > armTop + 5;
+      const c = fore ? forearm : sleeve;
+      const flare = longSkirt && y >= armEnd - 2 ? 1 : 0;
+      ROWX(y, B.al - flare, B.al + 1, c);
+      ROWX(y, B.ar - 1, B.ar + flare, c);
+      if (y === armEnd && cuff !== c) { ROWX(y, B.al - flare, B.al + 1, cuff); ROWX(y, B.ar - 1, B.ar + flare, cuff); }
+    }
+    const hand = top === 'armor' ? Md : S;
+    R(B.al, hy, 2, 2, hand);
+    R(B.ar - 1, hy, 2, 2, hand);
+
+    // ===== 5. 首と顔 =====
+    D1(11, y0 + 6, Sd); D1(12, y0 + 6, Sd);                   // 首
+    R(9, y0, 6, 5, S);
+    ROWX(y0 + 5, 10, 13, S);
+    D1(8, y0 + 3, S); D1(15, y0 + 3, Sd);                     // 耳
+    D1(10, y0 + 3, EYE); D1(13, y0 + 3, EYE);                 // 目
+    D1(10, y0 + 2, Hd); D1(13, y0 + 2, Hd);                   // まゆ
+    D1(14, y0 + 4, Sd); D1(13, y0 + 5, Sd);
+    if (look.style === 'bald') { R(9, y0 - 2, 6, 2, S); D1(10, y0 - 2, shade(S, 1.15)); D1(11, y0 - 2, shade(S, 1.15)); }
+
+    // ===== 6. 前髪 =====
+    const cap = () => {
+      ROWX(y0 - 3, 10, 13, H);
+      ROWX(y0 - 2, 9, 14, H);
+      ROWX(y0 - 1, 8, 15, H);
+      ROWX(y0, 8, 15, H);
+      ROWX(y0 + 1, 8, 15, H); D1(11, y0 + 1, null); g[y0 + 1][11] = S; g[y0 + 1][13] = S;
+      D1(8, y0 + 2, H); D1(15, y0 + 2, H); D1(8, y0 + 3, Hd); D1(15, y0 + 3, Hd);
+      D1(10, y0 - 1, Hd); D1(13, y0, Hd);
+    };
+    switch (look.style) {
+      case 'bald':
+        D1(8, y0 + 1, H); D1(8, y0 + 2, H); D1(15, y0 + 1, H); D1(15, y0 + 2, H);
+        break;
+      case 'messy':
+        cap(); D1(10, y0 - 4, H); D1(13, y0 - 4, H); D1(7, y0, H); D1(16, y0 + 1, H); D1(7, y0 + 1, Hd);
+        break;
+      case 'spiky':
+        cap(); D1(9, y0 - 4, H); D1(12, y0 - 5, H); D1(12, y0 - 4, H); D1(15, y0 - 4, H); D1(14, y0 - 3, H); D1(9, y0 - 3, H); D1(16, y0 - 1, H); D1(7, y0 - 1, H);
+        break;
+      case 'swept':
+        cap(); g[y0 + 1][11] = H; g[y0 + 1][13] = H; ROWX(y0 + 2, 12, 15, H); ROWX(y0 + 3, 13, 15, Hd); D1(16, y0 + 1, H);
+        break;
+      case 'long':
+        cap(); R(8, y0 + 2, 1, 10, H); R(15, y0 + 2, 1, 10, H); D1(8, y0 + 11, Hd); D1(15, y0 + 11, Hd); D1(7, y0 + 4, H); D1(16, y0 + 4, H);
+        break;
+      case 'bob':
+        cap(); R(8, y0 + 2, 1, 4, H); R(15, y0 + 2, 1, 4, H); R(7, y0 + 1, 1, 4, H); R(16, y0 + 1, 1, 4, Hd);
+        break;
+      case 'ponytail':
+        cap();
+        break;
+      case 'twin':
+        cap(); R(6, y0, 2, 9, H); R(16, y0, 2, 9, H); D1(6, y0 + 9, Hd); D1(17, y0 + 9, Hd); D1(7, y0, C2); D1(16, y0, C2);
+        break;
+      default:
+        cap();
+    }
+
+    // ===== 7. 頭の飾り =====
+    if (has('beard')) { const Z = look.beard || H; D1(9, y0 + 4, Z); D1(14, y0 + 4, Z); D1(11, y0 + 4, Z); D1(12, y0 + 4, Z); ROWX(y0 + 5, 10, 13, Z); ROWX(y0 + 6, 11, 12, shade(Z, 0.8)); }
+    if (has('longBeard')) { const Z = look.beard || '#eeeef4'; ROWX(y0 + 4, 9, 14, Z); R(10, y0 + 5, 4, 5, Z); R(11, y0 + 10, 2, 3, shade(Z, 0.85)); D1(12, y0 + 6, shade(Z, 0.85)); }
+    if (has('scar')) { D1(14, y0 + 3, '#a8584a'); D1(13, y0 + 4, '#a8584a'); }
+    if (has('mask')) { const K = look.mask || T; ROWX(y0 + 4, 9, 14, K); ROWX(y0 + 5, 10, 13, shade(K, 0.8)); }
+    if (has('hood')) {
+      ROWX(y0 - 4, 10, 13, T);
+      ROWX(y0 - 3, 9, 14, T);
+      for (let y = y0 - 2; y <= y0 + 5; y++) { ROWX(y, 7, 8, T); ROWX(y, 15, 16, Td); }
+      ROWX(y0 - 2, 9, 14, T); ROWX(y0 - 1, 9, 14, T); ROWX(y0, 9, 14, Td);
+      ROWX(y0 + 1, 9, 14, H); D1(14, y0 + 2, H);   // フードの中の前髪
+      ROWX(y0 + 6, 8, 10, T); ROWX(y0 + 6, 13, 15, Td);
+      ROWX(sh - 1, B.sl, B.sr, T); ROWX(sh, B.sl - 1, B.sr + 1, Td);          // 肩にかかる布
+    }
+    if (has('helmet')) {
+      ROWX(y0 - 3, 10, 13, M); ROWX(y0 - 2, 9, 14, M);
+      for (let y = y0 - 1; y <= y0 + 1; y++) ROWX(y, 8, 15, M);
+      for (let y = y0 + 2; y <= y0 + 5; y++) { ROWX(y, 8, 9, Md); ROWX(y, 14, 15, Md); }
+      ROWX(y0 + 2, 9, 14, Md); R(11, y0 + 2, 2, 3, M);
+      ROWX(y0 + 3, 10, 13, '#120c18'); D1(10, y0 + 3, EYE); D1(13, y0 + 3, EYE);
+      R(11, y0 - 6, 2, 3, C2); D1(13, y0 - 6, C2);
+    }
+    if (has('wizardHat')) {
+      ROWX(y0 - 1, 5, 18, T); ROWX(y0, 6, 17, Td);
+      ROWX(y0 - 2, 8, 15, shade(T, 1.25));
+      ROWX(y0 - 3, 9, 14, T); ROWX(y0 - 4, 10, 14, T); ROWX(y0 - 5, 10, 13, T); ROWX(y0 - 6, 11, 13, T); ROWX(y0 - 7, 12, 14, Td);
+      D1(11, y0 - 2, GEM);
+    }
+    if (has('strawHat')) {
+      const W1 = '#dcbc64', W2 = '#b0903e';
+      ROWX(y0 - 1, 4, 19, W1); ROWX(y0, 5, 18, W2);
+      ROWX(y0 - 2, 8, 15, '#a83a2a'); ROWX(y0 - 3, 9, 14, W1); ROWX(y0 - 4, 9, 14, W1); ROWX(y0 - 5, 10, 13, W2);
+    }
+    if (has('halo')) { ROWX(y0 - 7, 9, 14, GOLD); D1(8, y0 - 6, GOLD); D1(15, y0 - 6, GOLD); ROWX(y0 - 5, 9, 14, shade(GOLD, 0.8)); }
+    if (has('crown')) { const Cc = look.crown || GOLD; D1(9, y0 - 5, Cc); D1(11, y0 - 5, Cc); D1(12, y0 - 5, Cc); D1(14, y0 - 5, Cc); ROWX(y0 - 4, 9, 14, Cc); ROWX(y0 - 3, 9, 14, shade(Cc, 0.8)); D1(11, y0 - 4, GEM); D1(12, y0 - 4, GEM); }
+    if (has('circlet')) { ROWX(y0, 8, 15, GOLD); D1(11, y0, GEM); D1(12, y0, GEM); }
+    if (has('headband')) { ROWX(y0, 8, 15, C2); D1(16, y0, C2); D1(17, y0 + 1, C2); D1(17, y0 + 2, shade(C2, 0.8)); }
+    if (has('elfEars')) { D1(8, y0 + 3, S); D1(7, y0 + 2, S); D1(6, y0 + 1, S); D1(15, y0 + 3, S); D1(16, y0 + 2, S); D1(17, y0 + 1, Sd); }
+    if (has('mouseEars')) {
+      const pink = '#f0a8b0';
+      R(6, y0 - 5, 4, 3, H); R(7, y0 - 6, 2, 1, H); D1(7, y0 - 4, pink); D1(8, y0 - 4, pink);
+      R(14, y0 - 5, 4, 3, H); R(15, y0 - 6, 2, 1, H); D1(15, y0 - 4, pink); D1(16, y0 - 4, pink);
+    }
+
+    // ===== 8. 体の前の飾り =====
+    if (has('scarf')) { const Q = look.scarf || '#b03a3a'; ROWX(y0 + 6, 9, 14, Q); ROWX(sh, 9, 14, shade(Q, 0.85)); R(13, sh + 1, 2, 5, Q); D1(14, sh + 6, shade(Q, 0.8)); }
+    if (has('satchel')) {
+      for (let i = 0; i <= waist - sh; i++) D1(B.sr - 1 - Math.round(i * (B.sr - B.tl - 1) / (waist - sh)), sh + i, '#5a3a1e');
+      R(B.tl - 2, waist, 4, 4, '#9a6a3a'); ROWX(waist, B.tl - 2, B.tl + 1, '#6a4422'); D1(B.tl, waist + 1, GOLD);
+    }
+    if (has('cape')) { D1(B.sl + 1, sh, GOLD); D1(B.sr - 1, sh, GOLD); }
+
+    // ===== 9. 武器 =====
+    const gx = B.ar + 1;                         // 右手に持つ武器の柄の位置
+    switch (look.weapon) {
+      case 'sword':
+        D1(gx, hy - 2, GOLD); R(gx, hy - 1, 1, 3, WOOD_D);
+        ROWX(hy + 2, gx - 1, gx + 2, GOLD);
+        R(gx, hy + 3, 1, 13, METAL); R(gx + 1, hy + 3, 1, 12, METAL_D);
+        break;
+      case 'greatsword':
+        R(gx, hy - 2, 1, 4, WOOD_D); D1(gx, hy + 2, GOLD);
+        ROWX(hy - 3, gx - 2, gx + 2, C2 || GOLD);
+        R(gx - 1, hy - 21, 3, 18, M); R(gx, hy - 21, 1, 18, shade(M, 1.3)); R(gx + 1, hy - 21, 1, 18, Md); D1(gx, hy - 22, M);
+        break;
+      case 'axe':
+        R(gx, hy - 12, 1, 19, WOOD);
+        R(gx + 1, hy - 12, 3, 6, METAL); R(gx + 4, hy - 11, 1, 4, METAL_D); D1(gx - 1, hy - 10, METAL_D); D1(gx - 1, hy - 9, METAL_D);
+        break;
+      case 'staff':
+        R(gx, y0 - 4, 1, feet - (y0 - 4) + 1, WOOD); R(gx, y0 + 8, 1, 2, WOOD_D);
+        D1(gx - 1, y0 - 6, WOOD); D1(gx + 1, y0 - 6, WOOD); D1(gx - 1, y0 - 5, WOOD_D); D1(gx + 1, y0 - 5, WOOD_D);
+        R(gx, y0 - 7, 1, 2, GEM); D1(gx, y0 - 8, shade(GEM, 1.2));
+        break;
+      case 'orb':
+        R(gx, y0 - 2, 1, feet - (y0 - 2) + 1, WOOD);
+        R(gx - 1, y0 - 5, 3, 3, GEM); D1(gx - 1, y0 - 5, shade(GEM, 1.3)); D1(gx + 1, y0 - 3, shade(GEM, 0.7));
+        break;
+      case 'wand':
+        R(gx, hy - 5, 1, 7, WOOD);
+        ROWX(hy - 7, gx - 1, gx + 1, GEM); D1(gx, hy - 8, GEM); D1(gx, hy - 6, GEM);
+        break;
+      case 'fork':
+        R(gx, y0 - 3, 1, feet - (y0 - 3) + 1, WOOD);
+        ROWX(y0 - 4, gx - 1, gx + 1, METAL_D);
+        R(gx - 1, y0 - 7, 1, 3, METAL); R(gx, y0 - 7, 1, 3, METAL); R(gx + 1, y0 - 7, 1, 3, METAL);
+        break;
+      case 'daggers':
+        D1(gx, hy + 1, WOOD_D); R(gx, hy + 2, 1, 4, METAL); D1(gx, hy + 1, GOLD);
+        D1(B.al - 1, hy + 1, GOLD); R(B.al - 1, hy + 2, 1, 4, METAL);
+        break;
+      case 'bow': {
+        const bx = B.al - 3;
+        R(bx, hy - 6, 1, 13, WOOD);
+        R(bx + 1, hy - 10, 1, 4, WOOD); R(bx + 1, hy + 7, 1, 4, WOOD);
+        D1(bx + 2, hy - 11, WOOD_D); D1(bx + 2, hy + 11, WOOD_D);
+        R(bx + 3, hy - 10, 1, 21, CLOTH_W);
+        R(B.al, hy, 2, 2, S);
+        break;
+      }
+      case 'shield': {
+        D1(gx, hy - 2, GOLD); R(gx, hy - 1, 1, 3, WOOD_D);
+        ROWX(hy + 2, gx - 1, gx + 2, GOLD);
+        R(gx, hy + 3, 1, 12, METAL); R(gx + 1, hy + 3, 1, 11, METAL_D);
+        const s0 = B.al - 3, sy = sh + 3;
+        const kite = ['MMMMMM', 'MCCCCM', 'MCGGCM', 'MCGGCM', 'MCCCCM', 'MCCCCM', 'MCCCCM', 'MCCCCM', '.MCCM.', '.MCCM.', '..MM..'];
+        paint(g, kite, sy, { M: M, C: C1, G: C2 }, s0);
+        break;
+      }
+      default: break;
+    }
+
+    const keep = new Set([EYE, GEM, GOLD]);
+    return outline(sideShade(g, keep));
   }
 
-  /** frame: 0 = 立ち、1 = 歩き */
-  function heroGrid(look, cls, frame) {
-    const g = makeGrid(HW, HH);
-    const pal = heroPalette(look);
-    const gear = look.gear || [];
-    for (const k of gear) if (BACK_GEAR[k]) for (const [top, rows] of BACK_GEAR[k]) paint(g, rows, top, pal);
-    const bodyKind = D.CLASSES[cls] ? D.CLASSES[cls].body : 'tunic';
-    paint(g, BODY[bodyKind], 14, pal);
-    if (bodyKind === 'robe') paint(g, frame ? LEGS.robeWalk : LEGS.robeStand, 21, pal);
-    else paint(g, frame ? LEGS.walk : LEGS.stand, 19, pal);
-    paint(g, HEAD, 6, pal);
-    for (const [top, rows] of (HAIR[look.style] || HAIR.short)) paint(g, rows, top, pal);
-    for (const k of gear) if (GEAR[k]) for (const [top, rows] of GEAR[k]) paint(g, rows, top, pal);
-    for (const [x, y, ch] of (WEAPON[look.weapon] || [])) dot(g, x, y, pal[ch]);
-    return outline(g);
+  /** 顔のまわり（16×16）を切り出す。y0 は顔のいちばん上 */
+  function faceGrid(look) {
+    const full = heroGrid(look, 0);
+    const y0 = 7 + (look.h || 0);
+    const top = Math.max(0, y0 - 6);
+    const out = makeGrid(16, 16);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const sy = top + y, sx = 4 + x;
+      if (sy < HH) out[y][x] = full[sy][sx];
+    }
+    return out;
   }
 
   // ---------- 敵（1体ずつ手で描いた絵） ----------
@@ -249,7 +480,7 @@
 
   function enemyGrid(key) {
     const tpl = D.ENEMIES[key];
-    if (tpl.sprite === 'human') return heroGrid(tpl.look, tpl.look.weapon === 'sword' ? 'warrior' : 'mage', 0);
+    if (tpl.sprite === 'human') return heroGrid(tpl.look, 0);
     const art = ENEMY_ART[tpl.sprite];
     const pal = Object.assign({}, art.pal, tpl.tint ? TINTS[tpl.tint] : {});
     const g = makeGrid(16, 16);
@@ -261,9 +492,16 @@
   // ---------- 外に見せる道具 ----------
   const cache = {};
   const Sprites = {
+    /** 英雄の全身（24×48）。frame: 0 立ち / 1 歩き */
     heroCanvas(id, frame) {
       const k = 'h:' + id + ':' + (frame || 0);
-      if (!cache[k]) { const h = D.heroById[id]; cache[k] = toCanvas(heroGrid(h.look, h.cls, frame || 0)); }
+      if (!cache[k]) cache[k] = toCanvas(heroGrid(D.heroById[id].look, frame || 0));
+      return cache[k];
+    },
+    /** 英雄の顔まわり（16×16） */
+    faceCanvas(id) {
+      const k = 'f:' + id;
+      if (!cache[k]) cache[k] = toCanvas(faceGrid(D.heroById[id].look));
       return cache[k];
     },
     enemyCanvas(key) {
@@ -285,12 +523,15 @@
       return cache[k];
     },
     heroUrl(id, scale) { return this.url(this.heroCanvas(id, 0), scale || 4); },
+    faceUrl(id, scale) { return this.url(this.faceCanvas(id), scale || 4); },
     enemyUrl(key, scale) { return this.url(this.enemyCanvas(key), scale || 4); },
-    /** <img> の HTML。alt は空（名前は別に書くため） */
-    heroImg(id, cls) { return `<img class="px ${cls || ''}" src="${this.heroUrl(id)}" alt="" width="${HW * 2}" height="${HH * 2}">`; },
+    /** 全身の <img>。alt は空（名前は別に書くため） */
+    heroImg(id, cls) { return `<img class="px body ${cls || ''}" src="${this.heroUrl(id)}" alt="" width="${HW * 2}" height="${HH * 2}">`; },
+    /** 顔の <img> */
+    faceImg(id, cls) { return `<img class="px facei ${cls || ''}" src="${this.faceUrl(id)}" alt="" width="32" height="32">`; },
     enemyImg(key, cls) {
       const human = D.ENEMIES[key].sprite === 'human';
-      return `<img class="px ${cls || ''}" src="${this.enemyUrl(key)}" alt="" width="${(human ? HW : 16) * 2}" height="${(human ? HH : 16) * 2}">`;
+      return `<img class="px ${human ? 'body' : 'mon'} ${cls || ''}" src="${this.enemyUrl(key)}" alt="" width="${(human ? HW : 16) * 2}" height="${(human ? HH : 16) * 2}">`;
     },
     HW, HH,
   };

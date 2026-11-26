@@ -418,7 +418,7 @@ img.px.mono { filter: grayscale(1) brightness(.8); }
 
 /* ---------- 待機室 ---------- */
 #room-box { margin: -14px -14px 0; }
-.room-wrap { position: relative; width: 100%; aspect-ratio: 192 / 150; overflow: hidden; border-bottom: 2px solid var(--line); background: #2a2040; }
+.room-wrap { position: relative; width: 100%; aspect-ratio: 192 / 106; overflow: hidden; border-bottom: 2px solid var(--line); background: #2a2040; }
 .room-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; touch-action: manipulation; cursor: pointer; }
 .room-layer { position: absolute; inset: 0; pointer-events: none; }
 .room-bubble {
@@ -435,3 +435,120 @@ img.px.mono { filter: grayscale(1) brightness(.8); }
 .float.warn { color: #ffb0b0; }
 .float.gold { color: #ffd14a; }
 .float.ice { color: #a8e0ff; }
+
+/* =========================================================
+   第3版: 人の頭身のドット絵・待機所の施設・命令・記憶
+   ========================================================= */
+/* 絵の大きさ（全身 24×48 / 顔 16×16 / 魔物 16×16） */
+.face img.px.facei { width: 100%; height: 100%; }
+.slot .face img.px.facei { width: 86%; height: auto; }
+.hero-card .he { height: 64px; }
+.hero-card .he img.px.body { width: 30px; height: 60px; }
+.roster .hero-card .he { height: 52px; }
+.roster .hero-card .he img.px.body { width: 24px; height: 48px; }
+.roster .hero-card .he img.px.facei { width: 36px; height: 36px; }
+.detail-face { height: 100px; }
+.detail-face img.px.body { width: 44px; height: 88px; }
+.pull-card .pe img.px.body { width: 28px; height: 56px; }
+.pull-grid.one .pull-card .pe img.px.body { width: 56px; height: 112px; }
+.talk-line img.px.facei { width: 40px; height: 40px; flex: none; border-radius: 8px; background: #e8e2f4; }
+.memorial img.px.facei, .lost-list img.px.facei { width: 34px; height: 34px; border-radius: 8px; background: var(--bg2); }
+.enemy-chip img.px.mon { width: 40px; height: 40px; }
+.enemy-chip img.px.body { width: 30px; height: 60px; }
+
+/* 戦闘のユニット（ボタン） */
+button.unit { font: inherit; color: inherit; display: block; cursor: pointer; }
+.unit .ue { height: 74px; }
+.unit .ue img.px.body { height: 72px; width: 36px; }
+.unit .ue img.px.mon { height: 48px; width: 48px; }
+.unit.boss .ue { height: 98px; }
+.unit.boss .ue img.px.body { height: 96px; width: 48px; }
+.unit.boss .ue img.px.mon { height: 80px; width: 80px; }
+.unit.hero.can-cmd { box-shadow: 0 0 0 1px var(--gold), 0 0 10px rgba(245, 200, 91, .35); }
+.unit.picked { outline: 3px solid var(--gold); outline-offset: 1px; }
+.battle.targeting .unit.enemy:not(.dead) { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold), 0 0 16px rgba(245, 200, 91, .6); animation: pulse 1s ease infinite; }
+.unit.enemy.targeted::after { content: "🎯"; position: absolute; top: -10px; left: 4px; font-size: 16px; }
+.unit.marked { animation: hit .35s ease; }
+@keyframes pulse { 50% { transform: scale(1.04); } }
+@media (max-height: 700px) {
+  .unit .ue { height: 56px; }
+  .unit .ue img.px.body { height: 54px; width: 27px; }
+  .unit .ue img.px.mon { height: 40px; width: 40px; }
+  .unit.boss .ue { height: 74px; }
+  .unit.boss .ue img.px.body { height: 72px; width: 36px; }
+  .unit.boss .ue img.px.mon { height: 64px; width: 64px; }
+  .unit .hpnum { display: none; }
+}
+
+/* 命令ゲージと命令パネル */
+.gauge-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 12px; border-bottom: 1px solid var(--line); background: rgba(0, 0, 0, .25); }
+.gauge { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 800; color: var(--muted); }
+.gauge i { width: 14px; height: 8px; border-radius: 3px; background: #3a3060; border: 1px solid #5a4e8a; }
+.gauge i.on { background: #8a6ad8; border-color: #b9a2ff; }
+.gauge.ready { color: var(--gold); }
+.gauge.ready i { background: linear-gradient(180deg, #ffe9a8, var(--gold-deep)); border-color: #ffe9a8; }
+.gauge-hint { font-size: 11px; color: var(--muted); }
+.cmd-panel {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 8;
+  background: rgba(22, 17, 42, .97); border: 2px solid var(--gold); border-radius: 14px; padding: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .6); animation: sheet .2s ease;
+}
+.cmd-head { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 14px; }
+.cmd-head img.px.facei { width: 36px; height: 36px; border-radius: 8px; background: var(--bg2); flex: none; }
+.cmd-head .muted { font-size: 11px; }
+.cmd-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cmd-btns .btn { min-height: 46px; font-size: 13px; flex-direction: column; gap: 0; padding: 6px 8px; }
+.cmd-btns .btn small { font-size: 10px; font-weight: 600; }
+.cmd-btns .btn-small { min-height: 46px; }
+
+/* 待機所 */
+.base-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -6px 0 8px; }
+.base-name { background: none; border: 0; padding: 4px 0; font-weight: 800; font-size: 15px; color: var(--gold); text-align: left; text-decoration: underline dotted rgba(245, 200, 91, .5); text-underline-offset: 4px; }
+.dif { font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 999px; white-space: nowrap; border: 1px solid; }
+.dif-calm { color: #8ae0b0; border-color: #4a8a6a; background: #1a3a2a; }
+.dif-normal { color: #c9d4ff; border-color: #5a64a8; background: #232a50; }
+.dif-harsh { color: #ffb88a; border-color: #a8643a; background: #3a2418; }
+.dif-hell { color: #ff8a96; border-color: #b03a4a; background: #3a141c; }
+.facilities { list-style: none; margin: 0; padding: 6px 12px; }
+.facility { display: flex; align-items: center; gap: 10px; padding: 8px 0; }
+.facility + .facility { border-top: 1px solid var(--line); }
+.facility .fi { font-size: 24px; width: 32px; text-align: center; }
+.facility .fb { flex: 1; min-width: 0; font-size: 14px; }
+.facility .fb .muted { font-size: 12px; }
+.facility.unbuilt .fi { filter: grayscale(1); opacity: .6; }
+.facility .btn { flex-direction: column; gap: 0; min-width: 84px; min-height: 44px; }
+.facility .btn small { font-size: 10px; font-weight: 600; }
+.lvtag { font-size: 11px; font-weight: 800; color: var(--gold); background: #3c2f19; padding: 0 6px; border-radius: 6px; }
+.facility.unbuilt .lvtag { color: var(--muted); background: var(--bg2); }
+.lv-table { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 4px; font-size: 13px; }
+.lv-table li { display: grid; grid-template-columns: 3em 1fr; gap: 8px; padding: 6px 10px; border-radius: 9px; background: var(--panel); color: var(--muted); }
+.lv-table li.done { color: var(--text); }
+.lv-table li.now { color: var(--text); background: #3c2f19; border: 1px solid var(--gold-deep); }
+
+/* 塔: 滅んだ世界の見出し */
+.world-head { margin-top: 6px; padding: 8px 12px; border-radius: 12px; background: linear-gradient(90deg, #3a2250, #241a40); border: 1px solid #6a4a9a; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
+.world-head b { color: #e6d0ff; }
+.world-head span { font-size: 11px; color: var(--muted); }
+.world-head small { flex-basis: 100%; font-size: 11px; color: var(--muted); }
+.world-head.saved { background: linear-gradient(90deg, #4a3a14, #2a2010); border-color: var(--gold-deep); }
+.world-head.saved span { color: var(--gold); font-weight: 800; }
+.advice.saved-world { background: #3c2f19; border-color: var(--gold-deep); margin-bottom: 8px; }
+
+/* 記憶 */
+.memories { list-style: none; padding: 0; margin: 4px 0 0; display: grid; gap: 6px; font-size: 13px; }
+.memories li { background: #241d40; border-left: 3px solid #8a6ad8; padding: 6px 10px; border-radius: 0 9px 9px 0; }
+.memories li.locked { color: #8a80b0; border-left-color: #3a3060; }
+.mstar { display: inline-block; font-size: 10px; font-weight: 800; color: var(--gold); margin-right: 6px; }
+.memory-flash { display: inline-block; margin-top: 4px; color: #5a3aa0; font-weight: 700; }
+.saved-tag { font-size: 11px; font-weight: 800; color: var(--gold); }
+.intro-world { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: center; margin: 10px 0; padding: 10px 12px; border-radius: 12px; background: var(--panel); font-size: 13px; }
+.intro-world span { color: var(--muted); font-size: 12px; }
+.intro-world .dif { justify-self: start; font-size: 12px; }
+.intro-world small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+
+/* 編成: 英雄ごとの狙う敵 */
+.per-hero { display: grid; grid-template-columns: 30px 4.2em 1fr; align-items: center; gap: 6px; margin-top: 6px; }
+.per-hero img.px.facei { width: 30px; height: 30px; border-radius: 7px; background: var(--bg2); }
+.per-hero .pn { font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.per-hero .seg button { font-size: 11px; min-height: 34px; }
+.tactic.locked .tactic-label { color: var(--muted); }

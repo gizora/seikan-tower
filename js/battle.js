@@ -73,6 +73,8 @@
    *   floorIndex: 塔の階（0 始まり）
    *   tactics: 作戦（オブジェクトをそのまま参照するので、戦闘中に書き換えるとすぐ反映される）
    *   rng: 0..1 を返す関数（省略時 Math.random）
+   *   enemyMult: 敵の HP と攻撃の倍率（世界の難易度）
+   *   cmdCost: 命令してから次の命令を出せるまでに必要な行動の数（戦略室で短くなる）
    */
   function Battle(opts) {
     this.rng = opts.rng || Math.random;
@@ -83,6 +85,9 @@
     this.turns = 0;
     this.state = 'running';
     this.result = null;
+    this.enemyMult = opts.enemyMult || 1;
+    this.cmdCost = opts.cmdCost || 6;
+    this.cmdCharge = this.cmdCost;          // 最初から1回は命令できる
     this.heroes = opts.party.map((p, i) => {
       const st = heroStats(p.def, p.owned);
       const c = D.CLASSES[p.def.cls];
@@ -96,10 +101,11 @@
         traits, healMul: 1 + traitVal(traits, 'mend'), drain: traitVal(traits, 'drain'),
         firstGauge: traitVal(traits, 'first'), undying: traitVal(traits, 'undying'), counter: traitVal(traits, 'counter'),
         undyingUsed: false, disobeyed: 0,
+        tacOverride: p.tactic || null, order: null,
       });
     });
     this.enemies = [];
-    this.summary = { deaths: 0, healed: 0, guarded: 0, skills: 0, bossReached: false, lastWave: 0, disobeyed: 0, undying: 0 };
+    this.summary = { deaths: 0, healed: 0, guarded: 0, skills: 0, bossReached: false, lastWave: 0, disobeyed: 0, undying: 0, commands: 0, obeyed: 0 };
   }
 
   Battle.prototype.aliveHeroes = function () { return this.heroes.filter(u => u.alive); };
@@ -114,6 +120,8 @@
     const tpl = D.ENEMIES[key];
     const lv = this.floor.lv;
     const st = enemyStats(tpl, lv);
+    st.hp = Math.round(st.hp * this.enemyMult);
+    st.atk = Math.round(st.atk * this.enemyMult);
     const u = Object.assign(makeUnitBase(), {
       id, side: 'enemy', key, name: tpl.name, boss: !!tpl.boss, row: 'front', skill: tpl.skill || null, crit: 0.05,
       maxHp: st.hp, hp: st.hp, atk: st.atk, def: st.def, spd: st.spd, lv, cd: tpl.skill ? 1 : 0,
@@ -183,10 +191,41 @@
     if (actor.atkUp > 0) actor.atkUp--;
     if (actor.cd > 0) actor.cd--;
     const ev = actor.side === 'hero' ? this.heroAct(actor) : this.enemyAct(actor);
+    if (this.cmdCharge < this.cmdCost) this.cmdCharge++;
     ev.type = 'act';
     ev.actor = actor.id;
     ev.side = actor.side;
     return ev;
+  };
+
+  // ---------- マスターの命令（戦闘中に英雄をタップして出す） ----------
+  Battle.prototype.canCommand = function () {
+    return this.state === 'running' && this.waveIndex >= 0 && this.cmdCharge >= this.cmdCost;
+  };
+
+  /**
+   * 英雄に命令する。type: 'target'（targetId の敵を狙え）/ 'skill'（スキルを使え）/ 'guard'（守りを固めろ）
+   * 従うかどうかは命令したときに決まる（信頼度が低いと従わないことがある）。
+   */
+  Battle.prototype.command = function (unitId, type, targetId) {
+    const u = this.heroes.find(h => h.id === unitId);
+    if (!u || !u.alive) return { ok: false, reason: 'unit' };
+    if (!this.canCommand()) return { ok: false, reason: 'charge' };
+    if (type === 'skill' && u.cd > 0) return { ok: false, reason: 'cd' };
+    if (type === 'target' && !this.enemies.some(e => e.id === targetId && e.alive)) return { ok: false, reason: 'target' };
+    if (!['target', 'skill', 'guard'].includes(type)) return { ok: false, reason: 'type' };
+    this.cmdCharge = 0;
+    this.summary.commands++;
+    const lines = D.ORDER_LINES[u.pers];
+    if (this.rng() < disobeyChance(u.trust)) {
+      u.disobeyed++;
+      this.summary.disobeyed++;
+      return { ok: true, obeyed: false, unit: u.id, speech: this.randomOf(lines[1]) };
+    }
+    this.summary.obeyed++;
+    u.order = { type, targetId: targetId || null, left: 4 };
+    if (type === 'guard') u.guard = true;          // 守りはすぐに固める
+    return { ok: true, obeyed: true, unit: u.id, speech: this.randomOf(lines[0]) };
   };
 
   /** マスターが撤退を選んだとき */
@@ -260,6 +299,12 @@
 
   // ---------- 英雄の思考 ----------
   Battle.prototype.pickTarget = function (u, foes, mode) {
+    // 命令された敵がいれば、その敵を狙う
+    if (u.order && u.order.type === 'target') {
+      const t = foes.find(f => f.id === u.order.targetId);
+      if (t) return { target: t, whim: false, ordered: true };
+      u.order = null;
+    }
     if (u.pers === 'whimsical' && this.rng() < 0.25) {
       return { target: this.randomOf(foes), whim: true };
     }
@@ -273,9 +318,10 @@
 
   Battle.prototype.heroAct = function (u) {
     const T = this.tactics;
-    // 信頼度が低いと、作戦を無視して自分の考えで動く
-    const disobey = this.rng() < disobeyChance(u.trust);
-    const tac = disobey ? { target: 'auto', healLine: 0.5, skill: 'now' } : T;
+    const order = u.order;
+    // 信頼度が低いと、作戦を無視して自分の考えで動く（命令を受けている間は、命令に従う）
+    const disobey = !order && this.rng() < disobeyChance(u.trust);
+    const tac = disobey ? { target: 'auto', healLine: 0.5, skill: 'now' } : Object.assign({}, T, u.tacOverride || {});
     if (disobey) { u.disobeyed++; this.summary.disobeyed++; }
     const disobeySpeech = disobey && u.disobeyed === 1 ? '悪いけど、好きにやらせてもらう' : null;
 
@@ -285,15 +331,35 @@
     const bossPresent = foes.some(f => f.boss);
     const sk = u.skill;
     const ready = u.cd === 0;
-    const allowSkill = ready && (tac.skill === 'now' || bossPresent || ratio < 0.35);
+    const forceSkill = !!order && order.type === 'skill' && ready;
+    const allowSkill = ready && (forceSkill || tac.skill === 'now' || bossPresent || ratio < 0.35);
     const pinch = allies.filter(a => a.hp / a.maxHp < 0.3);
-    const tag = (ev) => { if (disobey) ev.disobey = true; return ev; };
+    const tag = (ev) => {
+      if (disobey) ev.disobey = true;
+      if (order) {
+        ev.ordered = order.type;
+        if (order.type !== 'target') u.order = null;
+        else if (ev.kind === 'attack' || ev.kind === 'skill') {
+          order.left--;
+          const t = this.unitById(order.targetId);
+          if (order.left <= 0 || !t || !t.alive) u.order = null;
+        }
+      }
+      return ev;
+    };
+
+    // 0) 命令: 守りを固めろ
+    if (order && order.type === 'guard') {
+      u.guard = true;
+      this.summary.guarded++;
+      return tag({ kind: 'guard', label: '防御', hits: [], buffs: [u.id], speech: '命令どおり、守りを固める！', text: `${u.name}は命令どおり守りを固めた。` });
+    }
 
     // 1) 回復役
     if (u.healer) {
       const needy = allies.filter(a => a.hp / a.maxHp < tac.healLine).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
       const caringSave = u.pers === 'caring' && pinch.length > 0;
-      if (sk.type === 'heal_all' && ready && (needy.length >= 2 || (needy.length >= 1 && (allowSkill || caringSave)))) {
+      if (sk.type === 'heal_all' && ready && (forceSkill || needy.length >= 2 || (needy.length >= 1 && (allowSkill || caringSave)))) {
         u.cd = sk.cd;
         this.summary.skills++;
         const hits = allies.map(a => this.heal(u, a, sk.mult));
@@ -317,7 +383,7 @@
     if (sk.type === 'taunt' && ready) {
       const caringSave = u.pers === 'caring' && pinch.some(a => a !== u);
       const backHurt = allies.some(a => a !== u && a.hp / a.maxHp < 0.7);
-      if ((allowSkill && (backHurt || bossPresent || T.stance === 'defend')) || caringSave) {
+      if (forceSkill || (allowSkill && (backHurt || bossPresent || T.stance === 'defend')) || caringSave) {
         u.cd = sk.cd;
         u.taunt = 2;
         u.guard = true;
@@ -338,7 +404,7 @@
     if (u.pers === 'careful') guardLine = Math.max(guardLine, 0.1) + 0.1;
     if (u.pers === 'brave') guardLine = 0;
     const healerAlive = allies.some(a => a.healer && a !== u);
-    if (!u.healer && ratio < guardLine && (healerAlive || u.pers === 'careful')) {
+    if (!order && !u.healer && ratio < guardLine && (healerAlive || u.pers === 'careful')) {
       u.guard = true;
       this.summary.guarded++;
       return tag({

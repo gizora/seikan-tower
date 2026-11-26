@@ -6,7 +6,7 @@
   const E = isNode ? require('./battle.js') : root.BattleEngine;
 
   const SAVE_KEY = 'seikan-tower-save-v1';
-  const VERSION = 2;
+  const VERSION = 3;
 
   function expToNext(lv) { return 30 + 25 * (lv - 1); }
   function floorExp(fi) { return 40 + 30 * (fi + 1); }
@@ -30,6 +30,24 @@
     return { lv: 1, exp: 0, star: def.rarity, trust: D.PERSONALITIES[def.pers].trust, traits, talked: -1 };
   }
 
+  function rollDifficulty(rng) {
+    rng = rng || Math.random;
+    const list = Object.entries(D.DIFFICULTIES);
+    let r = rng() * list.reduce((a, [, d]) => a + d.weight, 0);
+    for (const [k, d] of list) { r -= d.weight; if (r < 0) return k; }
+    return 'normal';
+  }
+  function randomBaseName(rng) {
+    rng = rng || Math.random;
+    const no = 100 + Math.floor(rng() * 9900);
+    return '第' + no + '待機所「' + D.BASE_NAMES[Math.floor(rng() * D.BASE_NAMES.length)] + '」';
+  }
+  function startBuildings() {
+    const b = {};
+    for (const k of D.BUILDING_ORDER) b[k] = D.BUILDINGS[k].start;
+    return b;
+  }
+
   function newState() {
     const heroes = {};
     for (const id of D.STARTER_HEROES) {
@@ -51,7 +69,10 @@
       seenIntro: false,
       seenDeathWarning: false,
       fallen: [],                                   // 慰霊碑: 倒れた英雄の記録
-      stats: { pulls: 0, battles: 0, wins: 0, lost: 0, promotions: 0, farewells: 0 },
+      stats: { pulls: 0, battles: 0, wins: 0, lost: 0, promotions: 0, farewells: 0, commands: 0 },
+      difficulty: rollDifficulty(),                 // 世界の難易度（始めたときにランダムで決まる）
+      base: { name: randomBaseName(), buildings: startBuildings() },
+      heroTactics: {},                              // 英雄ごとの「狙う敵」（戦略室 Lv5）
     };
   }
 
@@ -84,7 +105,7 @@
   /** 保存データを確かめて整える（前の版のデータもここで引き継ぐ） */
   function sanitize(s) {
     const base = newState();
-    if (!s || typeof s !== 'object' || (s.v !== 1 && s.v !== 2)) return base;
+    if (!s || typeof s !== 'object' || ![1, 2, 3].includes(s.v)) return base;
     const version = s.v;
     const out = Object.assign(base, s, { v: VERSION });
     out.tactics = Object.assign({}, D.DEFAULT_TACTICS, s.tactics || {});
@@ -109,6 +130,29 @@
     out.fallen = Array.isArray(s.fallen) ? s.fallen.filter(f => f && D.heroById[f.id]).slice(-50) : [];
     out.stats = Object.assign(base.stats, s.stats || {});
     out.seenDeathWarning = !!s.seenDeathWarning;
+    // 第3版: 世界の難易度・待機所の施設・英雄ごとの作戦
+    out.difficulty = D.DIFFICULTIES[s.difficulty] ? s.difficulty : 'normal';
+    const sb = (s.base && typeof s.base === 'object') ? s.base : {};
+    out.base = { name: typeof sb.name === 'string' && sb.name.trim() ? sb.name.trim().slice(0, 30) : base.base.name, buildings: {} };
+    for (const k of D.BUILDING_ORDER) {
+      const def = D.BUILDINGS[k];
+      let lv = sb.buildings ? int(sb.buildings[k], def.start) : def.start;
+      if (version < 3) {
+        // 前の版からは、今いる英雄が暮らせる宿舎と、進み具合に合った戦略室を用意する
+        if (k === 'dorm') { lv = 1; while (lv < def.max && D.DORM_CAP[lv] < Object.keys(out.heroes).length) lv++; }
+        if (k === 'strategy') lv = Math.min(def.max, Math.floor(out.cleared / 5));
+      }
+      out.base.buildings[k] = Math.max(def.start, Math.min(def.max, lv));
+    }
+    out.heroTactics = {};
+    for (const [id, t] of Object.entries(s.heroTactics || {})) {
+      if (out.heroes[id] && t && D.TACTICS.target.options.some(o => o.value === t.target)) out.heroTactics[id] = { target: t.target };
+    }
+    out.stats.commands = Math.max(0, int(out.stats.commands, 0));
+    // 戦略室でまだ使えない作戦は、ふつうの作戦にそろえる
+    for (const key of Object.keys(D.TACTICS)) {
+      if (D.TACTIC_UNLOCK[key] > out.base.buildings.strategy) out.tactics[key] = D.DEFAULT_TACTICS[key];
+    }
     return out;
   }
 
@@ -135,6 +179,59 @@
 
     reset() { this.state = newState(); this.save(); },
 
+    // ---------- 待機所の施設 ----------
+    buildingLv(k) { return this.state.base.buildings[k] || 0; },
+    dormCap() { return D.DORM_CAP[Math.max(1, this.buildingLv('dorm'))]; },
+    cmdCost() { return D.CMD_COST[this.buildingLv('strategy')]; },
+    tacticUnlocked(key) { return this.buildingLv('strategy') >= D.TACTIC_UNLOCK[key]; },
+    trainingShare() { return D.TRAINING_SHARE[this.buildingLv('training')]; },
+    /** 建てる・レベルを上げるのに必要なものと、できるかどうか */
+    buildInfo(k) {
+      const lv = this.buildingLv(k);
+      const def = D.BUILDINGS[k];
+      if (lv >= def.max) return { can: false, reason: 'max', lv };
+      const next = lv + 1;
+      const cost = D.BUILD_COST[next];
+      const req = D.BUILD_REQ[next];
+      if (this.state.cleared < req) return { can: false, reason: 'floor', lv, next, cost, req };
+      if (this.state.gold < cost) return { can: false, reason: 'gold', lv, next, cost, req };
+      return { can: true, lv, next, cost, req };
+    },
+    build(k) {
+      const info = this.buildInfo(k);
+      if (!info.can) return Object.assign({ ok: false }, info);
+      this.state.gold -= info.cost;
+      this.state.base.buildings[k] = info.next;
+      this.save();
+      return { ok: true, lv: info.next, cost: info.cost, isNew: info.next === 1 };
+    },
+    /** 建っている施設（下の階から） */
+    floorsBuilt() { return D.BUILDING_ORDER.filter(k => this.buildingLv(k) > 0); },
+    renameBase(name) {
+      const n = String(name || '').trim().slice(0, 30);
+      if (!n) return false;
+      this.state.base.name = n;
+      this.save();
+      return true;
+    },
+
+    // ---------- 世界の難易度・滅んだ世界 ----------
+    difficulty() { return D.DIFFICULTIES[this.state.difficulty]; },
+    worldSaved(wi) { return this.state.cleared >= (wi + 1) * D.FLOORS_PER_WORLD; },
+    /** その英雄がいま思い出している記憶の数（★2で1つ、★5で4つ） */
+    memoryCount(id) { return Math.min(4, this.owned(id).star - 1); },
+
+    // ---------- 英雄ごとの作戦（戦略室 Lv5） ----------
+    heroTarget(id) { const t = this.state.heroTactics[id]; return t ? t.target : null; },
+    setHeroTarget(id, target) {
+      if (!target) delete this.state.heroTactics[id];
+      else this.state.heroTactics[id] = { target };
+      this.save();
+    },
+
+    /** 戦闘に渡す設定（難易度・命令ゲージ） */
+    battleOptions() { return { enemyMult: this.difficulty().enemy, cmdCost: this.cmdCost() }; },
+
     // ---------- 英雄 ----------
     owned(id) { return this.state.heroes[id] || null; },
     def(id) { return D.heroById[id]; },
@@ -156,10 +253,12 @@
     partyIds() { return this.state.party.filter(Boolean); },
 
     partyForBattle() {
+      const perHero = this.tacticUnlocked('perHero');
       return this.partyIds().map(id => ({
         def: D.heroById[id],
         owned: JSON.parse(JSON.stringify(this.owned(id))),
         row: this.rowOf(id),
+        tactic: perHero && this.heroTarget(id) ? { target: this.heroTarget(id) } : null,
       }));
     },
 
@@ -258,7 +357,8 @@
       }
       this.state.stats.promotions++;
       this.save();
-      return { ok: true, star: h.star, newTrait, cost: info.cost };
+      const memory = D.heroById[id].memories[this.memoryCount(id) - 1] || null;
+      return { ok: true, star: h.star, newTrait, cost: info.cost, memory };
     },
 
     // ---------- 信頼度・会話 ----------
@@ -324,6 +424,7 @@
       const s = this.state;
       delete s.heroes[id];
       delete s.rows[id];
+      delete s.heroTactics[id];
       s.party = s.party.map(x => (x === id ? null : x));
     },
 
@@ -340,17 +441,32 @@
     },
 
     // ---------- ガチャ ----------
+    /** 召喚の確率（次元の門のレベルで★3が出やすくなる） */
+    gachaRates() {
+      const r3 = D.GATE_RATE3[Math.max(1, this.buildingLv('gate'))];
+      return { 3: r3, 2: D.GACHA.rates[2], 1: Math.round((1 - r3 - D.GACHA.rates[2]) * 100) / 100 };
+    },
+
     rollRarity(rng, guaranteeTwo) {
       if (this.state.pity + 1 >= D.GACHA.pityMax) return 3;
+      const rates = this.gachaRates();
       const r = rng();
-      if (r < D.GACHA.rates[3]) return 3;
-      if (r < D.GACHA.rates[3] + D.GACHA.rates[2]) return 2;
+      if (r < rates[3]) return 3;
+      if (r < rates[3] + rates[2]) return 2;
       return guaranteeTwo ? 2 : 1;
     },
+
+    roomLeft() { return this.dormCap() - Object.keys(this.state.heroes).length; },
 
     addHero(id) {
       const s = this.state;
       if (!s.heroes[id]) {
+        if (this.roomLeft() <= 0) {
+          // 宿舎がいっぱい: 新しい英雄は門の向こうへ帰り、星の欠片を残していく
+          const shards = D.FAREWELL_SHARDS[D.heroById[id].rarity];
+          s.shards += shards;
+          return { id, isNew: false, full: true, shards };
+        }
         s.heroes[id] = newOwned(id, this.rng);
         return { id, isNew: true };
       }
@@ -397,7 +513,8 @@
       s.stats.battles++;
       const survivors = partyIds.filter(id => !fallenIds.includes(id) && s.heroes[id]);
       const exp = Math.round(floorExp(fi) * (win ? 1 : 0.3));
-      const gold = win ? floorGold(fi) : 0;
+      const rm = this.difficulty().reward;
+      const gold = win ? Math.round(floorGold(fi) * rm) : 0;
       let gems = 0;
       let shards = 0;
       let firstClear = false;
@@ -405,11 +522,11 @@
         s.stats.wins++;
         if (fi + 1 > s.cleared) {
           s.cleared = fi + 1;
-          gems = firstClearGems(fi);
-          shards = firstClearShards(fi);
+          gems = Math.round(firstClearGems(fi) * rm / 10) * 10;
+          shards = Math.round(firstClearShards(fi) * rm);
           firstClear = true;
         } else {
-          shards = repeatShards(fi);
+          shards = Math.round(repeatShards(fi) * rm);
         }
       }
       s.gold += gold;
@@ -445,21 +562,42 @@
         }
       }
 
+      // 世界を救った（ボスの階を初めてクリア）: その世界から来た英雄は信頼度が上がる
+      let savedWorld = null;
+      if (win && firstClear && (fi + 1) % D.FLOORS_PER_WORLD === 0) {
+        const w = D.worldOfFloor(fi);
+        const natives = Object.keys(s.heroes).filter(id => D.heroById[id].world === w.id);
+        for (const id of natives) change(id, 10);
+        savedWorld = { id: w.id, name: w.name, natives };
+      }
+
       const levelUps = [];
       for (const id of survivors) {
         const before = this.owned(id).lv;
         const up = this.gainExp(id, exp);
         if (up > 0) levelUps.push({ id, from: before, to: this.owned(id).lv });
       }
+      // 訓練所: 編成に入っていない英雄も経験値をもらう
+      const trainExp = Math.round(exp * this.trainingShare());
+      const trained = [];
+      if (trainExp > 0) {
+        for (const id of Object.keys(s.heroes)) {
+          if (partyIds.includes(id)) continue;
+          const before = this.owned(id).lv;
+          const up = this.gainExp(id, trainExp);
+          trained.push(id);
+          if (up > 0) levelUps.push({ id, from: before, to: this.owned(id).lv, training: true });
+        }
+      }
       const newcomer = this.ensureSomeone();
       this.save();
-      return { win, reason: reason || null, exp, gold, gems, shards, firstClear, levelUps, fallen, trust, newcomer };
+      return { win, reason: reason || null, exp, gold, gems, shards, firstClear, levelUps, fallen, trust, newcomer, savedWorld, trainExp: trained.length ? trainExp : 0, trained };
     },
   };
 
   const api = {
     Game, expToNext, floorExp, floorGold, firstClearGems, firstClearShards, repeatShards, traitSlots,
-    newState, newOwned, sanitize, SAVE_KEY,
+    newState, newOwned, sanitize, SAVE_KEY, rollDifficulty,
   };
   if (isNode) module.exports = api;
   else root.GameCore = api;
