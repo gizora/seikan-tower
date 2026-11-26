@@ -62,13 +62,13 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
 }
-.brand { margin: 0; font-size: 18px; letter-spacing: .08em; font-weight: 800;
+.brand { margin: 0; font-size: 16px; white-space: nowrap; letter-spacing: .08em; font-weight: 800;
   background: linear-gradient(180deg, #fff3c9, var(--gold)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .brand-star { margin-right: 4px; }
-.wallet { display: flex; gap: 6px; }
-.coin { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px;
+.wallet { display: flex; gap: 4px; }
+.coin { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: 999px;
   background: var(--panel); border: 1px solid var(--line); font-size: 14px; }
-.coin b { font-variant-numeric: tabular-nums; min-width: 2.5em; text-align: right; }
+.coin b { font-variant-numeric: tabular-nums; min-width: 2em; text-align: right; }
 .coin.bump { animation: bump .4s ease; }
 @keyframes bump { 50% { transform: scale(1.12); } }
 
@@ -77,7 +77,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .tabbar {
   position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); z-index: 6;
   width: min(100%, var(--app-w));
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   height: calc(var(--tab-h) + var(--safe-b)); padding-bottom: var(--safe-b);
   background: rgba(22, 17, 42, .96); border-top: 1px solid var(--line);
 }
@@ -196,7 +196,7 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--gold); }
 .detail-face { width: 76px; height: 76px; font-size: 48px; border-radius: 16px; display: grid; place-items: center; background: var(--bg2); border: 3px solid var(--r1); flex: none; }
 .detail-face.r2 { border-color: var(--r2); }
 .detail-face.r3 { border-color: var(--r3); box-shadow: 0 0 14px rgba(255, 207, 74, .5); }
-.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 12px 0; }
+.stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin: 12px 0; }
 .stat { background: var(--bg2); border-radius: 10px; padding: 6px; text-align: center; }
 .stat small { display: block; color: var(--muted); font-size: 11px; }
 .stat b { font-variant-numeric: tabular-nums; }
@@ -368,3 +368,70 @@ h3 { margin: 18px 0 8px; font-size: 15px; color: var(--gold); }
   .unit.boss .ue { font-size: 44px; }
   .log { height: 74px; }
 }
+
+/* ---------- ドット絵 ---------- */
+img.px { image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+img.px.mono { filter: grayscale(1) brightness(.8); }
+.shard { color: #c9a6ff; font-weight: 900; }
+.face img.px { width: 82%; height: auto; }
+.slot .face { width: 100%; height: auto; aspect-ratio: 1; border-radius: 12px; display: grid; place-items: center; padding: 0; }
+.slot .face img.px { width: 70%; }
+.hero-card .he { display: grid; place-items: center; height: 48px; }
+.hero-card .he img.px { width: 36px; height: 44px; }
+.roster .hero-card .he { height: 38px; }
+.roster .hero-card .he img.px { width: 28px; height: 34px; }
+.hero-card .heart { color: #ff8aa8; }
+.hero-card .talk-dot { position: absolute; top: 3px; right: 4px; font-size: 12px; }
+.hero-card.picked { box-shadow: 0 0 0 3px var(--gold); }
+.heart.small { font-size: 10px; color: #ff8aa8; }
+.pull-card .pe img.px { width: 36px; height: 44px; }
+.pull-grid.one .pull-card .pe img.px { width: 72px; height: 88px; }
+.detail-face img.px { width: 54px; height: 66px; }
+.unit .ue { display: grid; place-items: center; height: 48px; }
+.unit .ue img.px { height: 46px; width: auto; }
+.unit.boss .ue { height: 84px; }
+.unit.boss .ue img.px { height: 80px; }
+.enemy-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.enemy-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; background: var(--panel); border-radius: 10px; padding: 6px 8px; }
+.enemy-chip img.px { width: 40px; height: auto; }
+.enemy-chip small { font-size: 10px; color: var(--muted); }
+
+/* 星・特性・信頼度 */
+.stars { color: var(--gold); letter-spacing: -1px; }
+.star-empty { color: #5a4f80; }
+.trait { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 800; padding: 1px 8px; border-radius: 999px; background: #3a2e66; border: 1px solid #6a58b0; margin: 0 4px 2px 0; }
+.trait b { color: var(--gold); font-size: 10px; }
+.trust { margin-top: 10px; font-size: 13px; }
+.trust b { color: #ff8aa8; }
+.trust .muted { display: block; font-size: 11px; }
+.trustbar { height: 8px; border-radius: 99px; background: var(--bg2); overflow: hidden; margin: 3px 0; }
+.trustbar i { display: block; height: 100%; background: linear-gradient(90deg, #ff6a8a, #ffb0c4); }
+.talk-line { display: flex; gap: 10px; align-items: center; background: #fff; color: #1d1636; border-radius: 12px; padding: 8px 12px; font-weight: 700; margin: 10px 0 0; }
+.talk-line img.px { width: 36px; height: 44px; flex: none; }
+.talk-line .muted { color: #6a5a8a; font-weight: 600; font-size: 12px; }
+
+/* 慰霊碑・失われた英雄 */
+.memorial ul, .lost-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.memorial li, .lost-list li { display: flex; gap: 10px; align-items: center; font-size: 13px; }
+.memorial img.px, .lost-list img.px { width: 28px; height: 34px; flex: none; }
+.advice.lost { background: #2a1a2a; border-color: #8a3a5a; margin-bottom: 8px; }
+
+/* ---------- 待機室 ---------- */
+#room-box { margin: -14px -14px 0; }
+.room-wrap { position: relative; width: 100%; aspect-ratio: 192 / 150; overflow: hidden; border-bottom: 2px solid var(--line); background: #2a2040; }
+.room-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; touch-action: manipulation; cursor: pointer; }
+.room-layer { position: absolute; inset: 0; pointer-events: none; }
+.room-bubble {
+  position: absolute; transform: translate(-50%, -100%); background: #fff; color: #1d1636; font-size: 11px; font-weight: 800;
+  padding: 3px 8px; border-radius: 9px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, .4); animation: rb .25s ease;
+}
+.room-bubble::after { content: ""; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 4px solid transparent; border-top-color: #fff; }
+@keyframes rb { from { opacity: 0; transform: translate(-50%, -80%); } }
+.room-hint { text-align: center; margin: 6px 0 10px; }
+
+/* 戦闘の追加効果 */
+.shieldbar { height: 4px; border-radius: 99px; background: rgba(0, 0, 0, .5); overflow: hidden; margin-top: 2px; }
+.shieldbar i { display: block; height: 100%; background: #9a6aff; transition: width .3s ease; }
+.float.warn { color: #ffb0b0; }
+.float.gold { color: #ffd14a; }
+.float.ice { color: #a8e0ff; }

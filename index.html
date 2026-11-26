@@ -21,21 +21,24 @@
       <div class="wallet">
         <span class="coin" title="召喚石"><span aria-hidden="true">💎</span><span class="sr-only">召喚石</span><b id="gems">0</b></span>
         <span class="coin" title="金貨"><span aria-hidden="true">🪙</span><span class="sr-only">金貨</span><b id="gold">0</b></span>
+        <span class="coin" title="星の欠片"><span aria-hidden="true" class="shard">✦</span><span class="sr-only">星の欠片</span><b id="shards">0</b></span>
       </div>
     </header>
 
     <main id="screen">
-      <section id="tab-tower" class="tab" aria-label="塔"></section>
+      <section id="tab-home" class="tab" aria-label="待機室"></section>
+      <section id="tab-tower" class="tab" aria-label="塔" hidden></section>
       <section id="tab-gacha" class="tab" aria-label="召喚" hidden></section>
       <section id="tab-heroes" class="tab" aria-label="英雄" hidden></section>
       <section id="tab-party" class="tab" aria-label="編成と作戦" hidden></section>
     </main>
 
     <nav class="tabbar" aria-label="メニュー">
-      <button type="button" class="tabbtn" data-tab="tower" aria-current="page"><span aria-hidden="true">🗼</span>塔</button>
+      <button type="button" class="tabbtn" data-tab="home" aria-current="page"><span aria-hidden="true">🏠</span>待機室</button>
+      <button type="button" class="tabbtn" data-tab="tower"><span aria-hidden="true">🗼</span>塔</button>
       <button type="button" class="tabbtn" data-tab="gacha"><span aria-hidden="true">🔮</span>召喚</button>
-      <button type="button" class="tabbtn" data-tab="heroes"><span aria-hidden="true">🧑‍🤝‍🧑</span>英雄</button>
-      <button type="button" class="tabbtn" data-tab="party"><span aria-hidden="true">📜</span>編成・作戦</button>
+      <button type="button" class="tabbtn" data-tab="heroes"><span aria-hidden="true">📖</span>英雄</button>
+      <button type="button" class="tabbtn" data-tab="party"><span aria-hidden="true">📜</span>編成</button>
     </nav>
 
     <!-- 戦闘画面 -->
@@ -74,6 +77,8 @@
 
   <script src="js/data.js"></script>
   <script src="js/battle.js"></script>
+  <script src="js/sprites.js"></script>
+  <script src="js/room.js"></script>
   <script src="js/game.js"></script>
   <script src="js/ui.js"></script>
 </body>

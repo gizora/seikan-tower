@@ -10,18 +10,41 @@
     defend:  { atk: 0.9,  def: 1.6,  guard: 0.3 },
   };
   const ACT_GAUGE = 1000;
-  const MAX_TURNS = 500;
-  const WAVE_HEAL = 0.2;       // ウェーブの合間に回復する割合
+  const MAX_TURNS = 600;
+  const WAVE_HEAL = 0.2;          // ウェーブの合間に回復する割合
+  const DANGER_LINE = 0.15;       // 「危なくなったら撤退」の HP の割合
+
+  // ---------- 能力の計算 ----------
+  function traitVal(traits, id) {
+    const t = (traits || []).find(x => x.id === id);
+    return t ? D.TRAITS[id].vals[t.lv - 1] : 0;
+  }
+
+  /** 信頼度 → 作戦に従わない確率 */
+  function disobeyChance(trust) {
+    return Math.max(0, (45 - trust) / 100);      // 0 なら 45%、45 以上なら 0%
+  }
+  /** 信頼度 → 能力の上がり方 */
+  function trustBonus(trust) {
+    return trust >= 90 ? 0.1 : trust >= 60 ? 0.05 : 0;
+  }
+  function trustTier(trust) {
+    let i = 0;
+    D.TRUST_TIERS.forEach((t, k) => { if (trust >= t.min) i = k; });
+    return i;
+  }
 
   function heroStats(def, owned) {
     const c = D.CLASSES[def.cls];
-    const r = D.RARITY[def.rarity];
-    const g = (1 + 0.07 * (owned.lv - 1)) * r.mult * (1 + 0.08 * owned.awaken);
+    const star = D.STARS[owned.star || def.rarity];
+    const g = (1 + 0.07 * (owned.lv - 1)) * star.mult;
+    const tb = 1 + trustBonus(owned.trust == null ? 50 : owned.trust);
+    const tr = owned.traits || [];
     return {
-      hp: Math.round(c.hp * g),
-      atk: Math.round(c.atk * g),
-      def: Math.round(c.def * g),
-      spd: c.spd + (def.rarity - 1) * 5 + owned.awaken * 2,
+      hp: Math.round(c.hp * g * (1 + traitVal(tr, 'sturdy'))),
+      atk: Math.round(c.atk * g * tb * (1 + traitVal(tr, 'might'))),
+      def: Math.round(c.def * g * tb * (1 + traitVal(tr, 'guard'))),
+      spd: Math.round((c.spd + ((owned.star || def.rarity) - 1) * 5) * (1 + traitVal(tr, 'swift'))),
     };
   }
 
@@ -46,8 +69,8 @@
 
   /**
    * @param {object} opts
-   *   party: [{ def, owned, row }]
-   *   floorIndex: 0..9
+   *   party: [{ def, owned, row }]   owned = { lv, star, trust, traits }
+   *   floorIndex: 塔の階（0 始まり）
    *   tactics: 作戦（オブジェクトをそのまま参照するので、戦闘中に書き換えるとすぐ反映される）
    *   rng: 0..1 を返す関数（省略時 Math.random）
    */
@@ -63,15 +86,20 @@
     this.heroes = opts.party.map((p, i) => {
       const st = heroStats(p.def, p.owned);
       const c = D.CLASSES[p.def.cls];
+      const traits = p.owned.traits || [];
       return Object.assign(makeUnitBase(), {
-        id: 'h' + i, side: 'hero', heroId: p.def.id, name: p.def.name, emoji: p.def.emoji,
+        id: 'h' + i, side: 'hero', heroId: p.def.id, name: p.def.name,
         cls: p.def.cls, row: p.row || c.row, pers: p.def.pers, skill: p.def.skill, line: p.def.line,
-        healer: !!c.healer, crit: c.crit, maxHp: st.hp, hp: st.hp, atk: st.atk, def: st.def, spd: st.spd,
-        lv: p.owned.lv,
+        healer: !!c.healer, crit: c.crit + traitVal(traits, 'keen'),
+        maxHp: st.hp, hp: st.hp, atk: st.atk, def: st.def, spd: st.spd,
+        lv: p.owned.lv, star: p.owned.star || p.def.rarity, trust: p.owned.trust == null ? 50 : p.owned.trust,
+        traits, healMul: 1 + traitVal(traits, 'mend'), drain: traitVal(traits, 'drain'),
+        firstGauge: traitVal(traits, 'first'), undying: traitVal(traits, 'undying'), counter: traitVal(traits, 'counter'),
+        undyingUsed: false, disobeyed: 0,
       });
     });
     this.enemies = [];
-    this.summary = { deaths: 0, healed: 0, guarded: 0, skills: 0, bossReached: false, lastWave: 0 };
+    this.summary = { deaths: 0, healed: 0, guarded: 0, skills: 0, bossReached: false, lastWave: 0, disobeyed: 0, undying: 0 };
   }
 
   Battle.prototype.aliveHeroes = function () { return this.heroes.filter(u => u.alive); };
@@ -79,21 +107,25 @@
   Battle.prototype.unitById = function (id) {
     return this.heroes.find(u => u.id === id) || this.enemies.find(u => u.id === id);
   };
+  /** 倒れた英雄の heroId 一覧（永久に失われる） */
+  Battle.prototype.fallenHeroIds = function () { return this.heroes.filter(u => !u.alive).map(u => u.heroId); };
+
+  Battle.prototype.makeEnemy = function (key, id) {
+    const tpl = D.ENEMIES[key];
+    const lv = this.floor.lv;
+    const st = enemyStats(tpl, lv);
+    const u = Object.assign(makeUnitBase(), {
+      id, side: 'enemy', key, name: tpl.name, boss: !!tpl.boss, row: 'front', skill: tpl.skill || null, crit: 0.05,
+      maxHp: st.hp, hp: st.hp, atk: st.atk, def: st.def, spd: st.spd, lv, cd: tpl.skill ? 1 : 0,
+    });
+    if (tpl.barrier) { u.maxShield = Math.round(st.hp * tpl.barrier); u.shield = u.maxShield; u.shieldTimer = 0; }
+    return u;
+  };
 
   Battle.prototype.startWave = function () {
     this.waveIndex++;
-    const lv = this.floor.lv;
     const w = this.waveIndex;
-    this.enemies = this.floor.waves[w].map((key, i) => {
-      const tpl = D.ENEMIES[key];
-      const st = enemyStats(tpl, lv);
-      return Object.assign(makeUnitBase(), {
-        id: 'e' + w + '_' + i, side: 'enemy', key, name: tpl.name, emoji: tpl.emoji, boss: !!tpl.boss,
-        gray: !!tpl.gray, row: 'front', skill: tpl.skill || null, crit: 0.05,
-        maxHp: st.hp, hp: st.hp, atk: st.atk, def: st.def, spd: st.spd, lv,
-        cd: tpl.skill ? 1 : 0,
-      });
-    });
+    this.enemies = this.floor.waves[w].map((key, i) => this.makeEnemy(key, 'e' + w + '_' + i));
     if (this.enemies.some(e => e.boss)) this.summary.bossReached = true;
     this.summary.lastWave = w;
     const healed = [];
@@ -103,16 +135,14 @@
         h.hp += amt;
         if (amt > 0) healed.push({ id: h.id, amount: amt });
       }
-      h.gauge = this.rng() * 300;
+      h.gauge = this.rng() * 300 + h.firstGauge;
       h.guard = false;
     }
     for (const e of this.enemies) e.gauge = this.rng() * 300;
+    const boss = this.enemies.find(e => e.boss);
     return {
-      type: 'wave', index: w, total: this.floor.waves.length, enemies: this.enemies, healed,
-      boss: this.enemies.some(e => e.boss),
-      text: this.enemies.some(e => e.boss)
-        ? `ボス出現！ ${this.enemies.find(e => e.boss).name}が立ちはだかる！`
-        : `ウェーブ ${w + 1}/${this.floor.waves.length} — 敵が現れた！`,
+      type: 'wave', index: w, total: this.floor.waves.length, enemies: this.enemies, healed, boss: !!boss,
+      text: boss ? `ボス出現！ ${boss.name}が立ちはだかる！` : `ウェーブ ${w + 1}/${this.floor.waves.length} — 敵が現れた！`,
     };
   };
 
@@ -138,6 +168,11 @@
       if (this.waveIndex + 1 >= this.floor.waves.length) return this.finish(true);
       return this.startWave();
     }
+    const r = this.tactics.retreat;
+    if (r === 'down' && this.summary.deaths > 0) return this.finish(false, 'retreat');
+    if (r === 'danger' && (this.summary.deaths > 0 || this.aliveHeroes().some(h => h.hp / h.maxHp < DANGER_LINE))) {
+      return this.finish(false, 'retreat');
+    }
     if (this.turns >= MAX_TURNS) return this.finish(false, 'timeout');
     this.turns++;
     const actor = this.pickActor();
@@ -154,14 +189,20 @@
     return ev;
   };
 
+  /** マスターが撤退を選んだとき */
+  Battle.prototype.retreat = function () {
+    if (this.state !== 'running') return null;
+    return this.finish(false, 'retreat');
+  };
+
   Battle.prototype.finish = function (win, reason) {
     this.state = 'done';
-    this.result = { win, reason: reason || null };
-    return { type: 'end', win, reason: reason || null };
+    this.result = { win, reason: reason || null, fallen: this.fallenHeroIds() };
+    return { type: 'end', win, reason: reason || null, fallen: this.result.fallen };
   };
 
   // ---------- ダメージと回復 ----------
-  Battle.prototype.damage = function (a, t, mult, forceCrit) {
+  Battle.prototype.damage = function (a, t, mult, forceCrit, noCounter) {
     const T = this.tactics;
     const atkMul = (a.side === 'hero' ? STANCE[T.stance].atk : 1) * (a.atkUp > 0 ? 1.25 : 1);
     const defMul = (t.side === 'hero' ? STANCE[T.stance].def : 1) * (t.guard ? 2 : 1) * (t.defUp > 0 ? 1.35 : 1);
@@ -170,18 +211,43 @@
     let dmg = atk * mult * 50 / (50 + def) * (0.9 + 0.2 * this.rng());
     const crit = !!forceCrit || this.rng() < a.crit;
     if (crit) dmg *= 1.5;
-    const amount = Math.max(1, Math.round(dmg));
+    let amount = Math.max(1, Math.round(dmg));
+    const res = { id: t.id, amount, crit, dead: false };
+    // 影の盾
+    if (t.shield > 0) {
+      const absorbed = Math.min(t.shield, amount);
+      t.shield -= absorbed;
+      amount -= absorbed;
+      res.shield = absorbed;
+      res.amount = amount;
+      if (t.shield === 0) res.shieldBroken = true;
+    }
     t.hp = Math.max(0, t.hp - amount);
-    const dead = t.hp === 0;
-    if (dead) {
+    if (t.hp === 0 && t.side === 'hero' && t.undying > 0 && !t.undyingUsed && this.rng() < t.undying) {
+      t.hp = 1;
+      t.undyingUsed = true;
+      res.undying = true;
+      this.summary.undying++;
+    }
+    if (t.hp === 0) {
       t.alive = false;
+      res.dead = true;
       if (t.side === 'hero') this.summary.deaths++;
     }
-    return { id: t.id, amount, crit, dead };
+    // 吸血
+    if (a.side === 'hero' && a.drain > 0 && a.alive && amount > 0) {
+      const h = Math.min(a.maxHp - a.hp, Math.round(amount * a.drain));
+      if (h > 0) { a.hp += h; res.drain = { id: a.id, amount: h }; }
+    }
+    // 反撃
+    if (!noCounter && t.side === 'hero' && t.alive && t.counter > 0 && a.alive && this.rng() < t.counter) {
+      res.counter = this.damage(t, a, 0.6, false, true);
+    }
+    return res;
   };
 
   Battle.prototype.heal = function (a, t, mult) {
-    const raw = Math.round(a.atk * mult * (0.9 + 0.2 * this.rng()));
+    const raw = Math.round(a.atk * mult * (a.healMul || 1) * (0.9 + 0.2 * this.rng()));
     const amount = Math.min(t.maxHp - t.hp, raw);
     t.hp += amount;
     this.summary.healed += amount;
@@ -193,56 +259,57 @@
   };
 
   // ---------- 英雄の思考 ----------
-  Battle.prototype.pickTarget = function (u, foes) {
-    let mode = this.tactics.target;
+  Battle.prototype.pickTarget = function (u, foes, mode) {
     if (u.pers === 'whimsical' && this.rng() < 0.25) {
       return { target: this.randomOf(foes), whim: true };
     }
-    if (mode === 'auto') {
-      mode = { brave: 'strong', careful: 'weak' }[u.pers] || 'front';
-    }
+    if (mode === 'auto') mode = { brave: 'strong', careful: 'weak' }[u.pers] || 'front';
     let target;
-    if (mode === 'weak') {
-      target = foes.reduce((m, f) => (f.hp < m.hp ? f : m));
-    } else if (mode === 'strong') {
-      target = foes.find(f => f.boss) || foes.reduce((m, f) => (f.atk > m.atk ? f : m));
-    } else {
-      target = foes[0];
-    }
+    if (mode === 'weak') target = foes.reduce((m, f) => (f.hp < m.hp ? f : m));
+    else if (mode === 'strong') target = foes.find(f => f.boss) || foes.reduce((m, f) => (f.atk > m.atk ? f : m));
+    else target = foes[0];
     return { target, whim: false };
   };
 
   Battle.prototype.heroAct = function (u) {
     const T = this.tactics;
+    // 信頼度が低いと、作戦を無視して自分の考えで動く
+    const disobey = this.rng() < disobeyChance(u.trust);
+    const tac = disobey ? { target: 'auto', healLine: 0.5, skill: 'now' } : T;
+    if (disobey) { u.disobeyed++; this.summary.disobeyed++; }
+    const disobeySpeech = disobey && u.disobeyed === 1 ? '悪いけど、好きにやらせてもらう' : null;
+
     const allies = this.aliveHeroes();
     const foes = this.aliveEnemies();
     const ratio = u.hp / u.maxHp;
     const bossPresent = foes.some(f => f.boss);
     const sk = u.skill;
     const ready = u.cd === 0;
-    const allowSkill = ready && (T.skill === 'now' || bossPresent || ratio < 0.35);
+    const allowSkill = ready && (tac.skill === 'now' || bossPresent || ratio < 0.35);
     const pinch = allies.filter(a => a.hp / a.maxHp < 0.3);
+    const tag = (ev) => { if (disobey) ev.disobey = true; return ev; };
 
     // 1) 回復役
     if (u.healer) {
-      const needy = allies.filter(a => a.hp / a.maxHp < T.healLine).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
+      const needy = allies.filter(a => a.hp / a.maxHp < tac.healLine).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp);
       const caringSave = u.pers === 'caring' && pinch.length > 0;
       if (sk.type === 'heal_all' && ready && (needy.length >= 2 || (needy.length >= 1 && (allowSkill || caringSave)))) {
         u.cd = sk.cd;
         this.summary.skills++;
         const hits = allies.map(a => this.heal(u, a, sk.mult));
-        return {
-          kind: 'skill', label: sk.name, hits, speech: (caringSave && !allowSkill) ? 'ピンチは見過ごせない！' : u.line,
+        return tag({
+          kind: 'skill', label: sk.name, hits,
+          speech: disobeySpeech || ((caringSave && !allowSkill) ? 'ピンチは見過ごせない！' : u.line),
           text: `${u.name}の「${sk.name}」！ 味方全体が回復した。`,
-        };
+        });
       }
       if (needy.length > 0) {
         const t = needy[0];
         const hit = this.heal(u, t, 1.0);
-        return {
-          kind: 'heal', label: '回復', hits: [hit], speech: t === u ? '自分も回復！' : `${t.name}、回復するね！`,
+        return tag({
+          kind: 'heal', label: '回復', hits: [hit], speech: disobeySpeech || (t === u ? '自分も回復！' : `${t.name}、回復するね！`),
           text: `${u.name}は${t.name}を ${hit.amount} 回復した。`,
-        };
+        });
       }
     }
 
@@ -257,12 +324,12 @@
         this.summary.skills++;
         const buffs = [u.id];
         if (sk.partyDef) for (const a of allies) { a.defUp = 3; if (a !== u) buffs.push(a.id); }
-        return {
+        return tag({
           kind: 'skill', label: sk.name, hits: [], buffs,
-          speech: (caringSave && !allowSkill) ? '仲間には手を出させない！' : u.line,
+          speech: disobeySpeech || ((caringSave && !allowSkill) ? '仲間には手を出させない！' : u.line),
           text: sk.partyDef ? `${u.name}の「${sk.name}」！ 敵の攻撃を引きつけ、味方の防御が上がった。`
                             : `${u.name}の「${sk.name}」！ 敵の攻撃を引きつける。`,
-        };
+        });
       }
     }
 
@@ -274,15 +341,15 @@
     if (!u.healer && ratio < guardLine && (healerAlive || u.pers === 'careful')) {
       u.guard = true;
       this.summary.guarded++;
-      return {
-        kind: 'guard', label: '防御', hits: [], buffs: [u.id], speech: '守りを固める！',
+      return tag({
+        kind: 'guard', label: '防御', hits: [], buffs: [u.id], speech: disobeySpeech || '守りを固める！',
         text: `${u.name}は守りを固めた。`,
-      };
+      });
     }
 
     // 4) 攻撃（スキル or 通常）
-    const { target, whim } = this.pickTarget(u, foes);
-    const speechWhim = whim ? 'こっちが気になる！' : null;
+    const { target, whim } = this.pickTarget(u, foes, tac.target);
+    const speech = disobeySpeech || (whim ? 'こっちが気になる！' : null);
     if (allowSkill && (sk.type === 'single' || sk.type === 'multi' || sk.type === 'aoe')) {
       u.cd = sk.cd;
       this.summary.skills++;
@@ -302,53 +369,66 @@
       } else {
         for (const f of foes) hits.push(this.damage(u, f, sk.mult, false));
       }
-      return {
+      return tag({
         kind: 'skill', label: sk.name, hits, buffs: sk.partyAtk ? allies.map(a => a.id) : [],
-        speech: u.line,
+        speech: disobeySpeech || u.line,
         text: `${u.name}の「${sk.name}」！ ` + describeHits(this, hits),
-      };
+      });
     }
     const mult = u.healer ? 0.7 : 1.0;
     const hit = this.damage(u, target, mult, false);
-    return {
-      kind: 'attack', label: '攻撃', hits: [hit], speech: speechWhim,
+    return tag({
+      kind: 'attack', label: '攻撃', hits: [hit], speech,
       text: `${u.name}の攻撃！ ` + describeHits(this, [hit]),
-    };
+    });
   };
 
   // ---------- 敵の行動 ----------
   Battle.prototype.enemyAct = function (u) {
-    const foes = this.aliveHeroes();
-    const taunters = foes.filter(f => f.taunt > 0);
-    const pick = () => {
+    const tpl = D.ENEMIES[u.key];
+    const foes = () => this.aliveHeroes();
+    const pick = (exclude) => {
+      const list = foes().filter(f => f !== exclude);
+      if (list.length === 0) return null;
+      const taunters = list.filter(f => f.taunt > 0);
       if (taunters.length) return taunters[0];
-      const fronts = foes.filter(f => f.row === 'front');
+      const fronts = list.filter(f => f.row === 'front');
       if (fronts.length && this.rng() < 0.7) return this.randomOf(fronts);
-      return this.randomOf(foes);
+      return this.randomOf(list);
     };
     let ev;
     if (u.skill && u.cd === 0) {
       u.cd = u.skill.cd;
       const hits = u.skill.type === 'aoe'
-        ? foes.map(f => this.damage(u, f, u.skill.mult, false))
+        ? foes().map(f => this.damage(u, f, u.skill.mult, false))
         : [this.damage(u, pick(), u.skill.mult, false)];
-      ev = {
-        kind: 'skill', label: u.skill.name, hits,
-        text: `${u.name}の「${u.skill.name}」！ ` + describeHits(this, hits),
-      };
+      ev = { kind: 'skill', label: u.skill.name, hits, text: `${u.name}の「${u.skill.name}」！ ` + describeHits(this, hits) };
       // 手下を呼ぶボス
-      const tpl = D.ENEMIES[u.key];
       if (tpl.summon && this.aliveEnemies().length < tpl.summonMax) {
-        const s = this.spawnEnemy(tpl.summon);
+        this.spawnCount = (this.spawnCount || 0) + 1;
+        const s = this.makeEnemy(tpl.summon, 'e' + this.waveIndex + '_s' + this.spawnCount);
+        s.summoned = true;
+        this.enemies.push(s);
         ev.summoned = [s];
         ev.text += ` ${s.name}が駆けつけた！`;
       }
+      // 凍えさせるボス: 英雄の行動を遅らせる
+      if (tpl.freeze) {
+        for (const f of foes()) f.gauge -= tpl.freeze;
+        ev.frozen = foes().map(f => f.id);
+        ev.text += ' 英雄たちは凍えて動きが鈍った！';
+      }
     } else {
-      const hit = this.damage(u, pick(), 1.0, false);
-      ev = { kind: 'attack', label: '攻撃', hits: [hit], text: `${u.name}の攻撃！ ` + describeHits(this, [hit]) };
+      const t1 = pick();
+      const hits = [this.damage(u, t1, 1.0, false)];
+      // 双頭: 2人を同時に殴る
+      if (tpl.double) {
+        const t2 = pick(t1);
+        if (t2) hits.push(this.damage(u, t2, 1.0, false));
+      }
+      ev = { kind: 'attack', label: '攻撃', hits, text: `${u.name}の攻撃！ ` + describeHits(this, hits) };
     }
     // 行動するたびに強くなるボス
-    const tpl = D.ENEMIES[u.key];
     if (tpl.enrage) {
       u.baseAtk = u.baseAtk || u.atk;
       u.atk = Math.round(u.atk + u.baseAtk * tpl.enrage);
@@ -356,47 +436,54 @@
       if (u.rage % 3 === 0) ev.text += ` ${u.name}の怒りが増していく…（攻撃力 ${u.atk}）`;
       ev.enraged = true;
     }
+    // 影の盾を張り直す
+    if (tpl.barrier && u.alive) {
+      u.shieldTimer++;
+      if (u.shield === 0 && u.shieldTimer >= 4) {
+        u.shield = u.maxShield;
+        u.shieldTimer = 0;
+        ev.reshield = true;
+        ev.text += ` ${u.name}は影の盾を張り直した！`;
+      } else if (u.shield > 0) {
+        u.shieldTimer = 0;
+      }
+    }
     return ev;
-  };
-
-  Battle.prototype.spawnEnemy = function (key) {
-    const tpl = D.ENEMIES[key];
-    const lv = this.floor.lv;
-    const st = enemyStats(tpl, lv);
-    this.spawnCount = (this.spawnCount || 0) + 1;
-    const u = Object.assign(makeUnitBase(), {
-      id: 'e' + this.waveIndex + '_s' + this.spawnCount, side: 'enemy', key, name: tpl.name, emoji: tpl.emoji,
-      boss: !!tpl.boss, gray: !!tpl.gray, row: 'front', skill: tpl.skill || null, crit: 0.05,
-      maxHp: st.hp, hp: st.hp, atk: st.atk, def: st.def, spd: st.spd, lv, cd: tpl.skill ? 1 : 0, summoned: true,
-    });
-    this.enemies.push(u);
-    return u;
   };
 
   function describeHits(b, hits) {
     if (hits.length === 0) return '';
     const byTarget = {};
-    for (const h of hits) {
-      byTarget[h.id] = byTarget[h.id] || { amount: 0, dead: false, crit: false };
-      byTarget[h.id].amount += h.amount;
-      byTarget[h.id].dead = byTarget[h.id].dead || h.dead;
-      byTarget[h.id].crit = byTarget[h.id].crit || h.crit;
-    }
-    return Object.keys(byTarget).map(id => {
+    const order = [];
+    const add = (h) => {
+      if (!byTarget[h.id]) { byTarget[h.id] = { amount: 0, dead: false, crit: false, shield: 0, undying: false }; order.push(h.id); }
+      const r = byTarget[h.id];
+      r.amount += h.amount;
+      r.shield += h.shield || 0;
+      r.dead = r.dead || h.dead;
+      r.crit = r.crit || h.crit;
+      r.undying = r.undying || !!h.undying;
+    };
+    for (const h of hits) add(h);
+    let text = order.map(id => {
       const t = b.unitById(id);
       const r = byTarget[id];
-      return `${r.crit ? '会心！' : ''}${t.name}に ${r.amount}${r.dead ? '（倒れた）' : ''}`;
+      return `${r.crit ? '会心！' : ''}${t.name}に ${r.amount}${r.shield ? `（盾が ${r.shield} 防いだ）` : ''}` +
+        `${r.undying ? '（不屈で耐えた！）' : ''}${r.dead ? '（倒れた）' : ''}`;
     }).join('、');
+    for (const h of hits) {
+      if (h.counter) text += ` ${b.unitById(h.id).name}の反撃！ ${b.unitById(h.counter.id).name}に ${h.counter.amount}${h.counter.dead ? '（倒れた）' : ''}`;
+    }
+    return text;
   }
 
   /** 最後まで一気に進める（シミュレーション用） */
   Battle.prototype.runToEnd = function () {
-    let ev;
-    while ((ev = this.next())) { /* 進めるだけ */ }
+    while (this.next()) { /* 進めるだけ */ }
     return this.result;
   };
 
-  const api = { Battle, heroStats, enemyStats, power, STANCE };
+  const api = { Battle, heroStats, enemyStats, power, STANCE, disobeyChance, trustBonus, trustTier, traitVal };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BattleEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
