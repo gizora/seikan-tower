@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="30%" r="75%">
+      <stop offset="0" stop-color="#6a4bd6"/><stop offset=".55" stop-color="#2a1e5c"/><stop offset="1" stop-color="#110c22"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff3c9"/><stop offset="1" stop-color="#d89a2c"/>
+    </linearGradient>
+    <linearGradient id="tower" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4b3a8f"/><stop offset="1" stop-color="#21184a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <!-- 塔 -->
+  <path d="M206 452 L222 206 L290 206 L306 452 Z" fill="url(#tower)" stroke="#8f7ae0" stroke-width="6"/>
+  <path d="M196 214 L256 150 L316 214 Z" fill="#5b47a8" stroke="#8f7ae0" stroke-width="6"/>
+  <rect x="244" y="250" width="24" height="34" rx="12" fill="#ffd97a"/>
+  <rect x="244" y="320" width="24" height="34" rx="12" fill="#ffd97a" opacity=".7"/>
+  <rect x="226" y="400" width="60" height="52" rx="30" fill="#110c22"/>
+  <rect x="150" y="448" width="212" height="16" rx="8" fill="#3a2d78"/>
+  <!-- 星 -->
+  <path d="M256 40 L275 92 L330 94 L287 128 L302 181 L256 150 L210 181 L225 128 L182 94 L237 92 Z" fill="url(#gold)" stroke="#fff6d8" stroke-width="4"/>
+  <circle cx="120" cy="120" r="6" fill="#fff3c9"/><circle cx="402" cy="160" r="8" fill="#fff3c9"/>
+  <circle cx="390" cy="320" r="5" fill="#fff3c9" opacity=".8"/><circle cx="110" cy="300" r="5" fill="#fff3c9" opacity=".8"/>
+</svg>
