@@ -19,11 +19,15 @@
     <!-- 待機室（ゲームの中で映すのはここだけ） -->
     <div id="scene" class="scene" aria-label="待機室。建物や英雄をタップできる"></div>
     <header id="hud" class="hud">
-      <button type="button" id="world-name" class="world-name" data-action="rename" aria-label="待機室の名前（タップで変更）">…</button>
+      <div class="hud-top">
+        <h1 id="world-name" class="world-name" title="待機室の名前（滅びかけた世界の名前）">…</h1>
+        <button type="button" id="logout" class="logout" data-action="logout" aria-label="ログアウト"><span aria-hidden="true">⏻</span></button>
+      </div>
       <div class="wallet">
         <span class="coin" title="召喚石"><span aria-hidden="true">💎</span><span class="sr-only">召喚石</span><b id="gems">0</b></span>
         <span class="coin" title="金貨"><span aria-hidden="true">🪙</span><span class="sr-only">金貨</span><b id="gold">0</b></span>
         <span class="coin" title="星の欠片"><span aria-hidden="true" class="shard">✦</span><span class="sr-only">星の欠片</span><b id="shards">0</b></span>
+        <button type="button" id="res-bar" class="res-bar" data-action="supplies" aria-label="物資（タップで詳しく）"></button>
       </div>
       <div id="notices" class="notices" aria-live="polite"></div>
       <div class="cam-tools" aria-label="視点">
@@ -43,7 +47,7 @@
         <span id="x-gauge" class="gauge" role="status"><i></i></span>
         <div class="x-tools">
           <button type="button" id="x-order" class="chip" aria-pressed="false">指示</button>
-          <button type="button" id="x-speed" class="chip">×2</button>
+          <button type="button" id="x-speed" class="chip" aria-label="速さ">×1</button>
           <button type="button" id="x-tactics" class="chip">作戦</button>
           <button type="button" id="x-retreat" class="chip chip-dim">撤退</button>
         </div>
@@ -69,6 +73,15 @@
       </div>
     </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <!-- ログアウトしたあと（ブラウザが閉じるのを止めたときに出す） -->
+    <div id="bye" class="bye" hidden>
+      <div class="bye-card">
+        <p class="bye-mark" aria-hidden="true">✦</p>
+        <h2>おつかれさまでした</h2>
+        <p class="muted">保存しました。このページを閉じてかまいません。<br>待機室の時間は、閉じているあいだも進みます（最大4時間）。</p>
+        <button type="button" class="btn btn-gold" data-action="bye-back">待機室に戻る</button>
+      </div>
+    </div>
   </div>
 
   <!-- 外部ライブラリ（MIT ライセンス）: three.js r147 と、その後処理、pixelfx -->

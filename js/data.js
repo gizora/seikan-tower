@@ -387,9 +387,10 @@
     fear:  { name: '恐怖', icon: '😨', turns: 3, mult: 0.7, msg: '{n}が恐怖状態、能力値が30%減少' },
     bleed: { name: '出血', icon: '🩸', turns: 3, dmg: 0.06, msg: '{n}が出血状態、体力が減少中' },
     cold:  { name: '凍え', icon: '❄️', msg: '{n}が凍えている、行動が遅れる' },
+    hunger: { name: '空腹', icon: '🍞', mult: 0.85, msg: '{n}が空腹状態、能力値が15%減少' },
   };
   // 英雄の今の行動（戦闘の映像の英雄一覧に出す）
-  const ACTIONS = { attack: '攻撃', skill: 'スキル', heal: '回復', guard: '防御', slack: 'サボり', freeze: '立ちすくむ', wait: '待機', down: '戦闘不能' };
+  const ACTIONS = { attack: '攻撃', skill: 'スキル', heal: '回復', guard: '防御', slack: 'サボり', freeze: '立ちすくむ', wait: '待機', down: '戦闘不能', investigate: '調査', follow: '同行', explore: '探索', move: '移動', flee: '逃走' };
 
   // ---------- 提案（英雄がマスターに何かを提案する） ----------
   // 待機所での提案。accept で信頼度が上がり、断ると少し下がる
@@ -397,7 +398,7 @@
     train:  { name: '特訓',             trust: 5, desc: '金貨を払って特訓し、経験値を得る' },
     join:   { name: '次の戦いへの参加', trust: 6, desc: '編成に入る（いっぱいなら一番弱い英雄と交代）' },
     tactic: { name: '作戦の変更',       trust: 4, desc: '作戦をこの英雄の考えに変える' },
-    feast:  { name: '宴会',             trust: 3, desc: '金貨を払い、待機所の全員の信頼度が上がる' },
+    feast:  { name: '宴会',             trust: 3, desc: '食料を使い、待機室の全員の信頼度が上がる' },
     potion: { name: '薬の補充',         trust: 3, desc: '金貨を払い、薬を1つ作る', need: 'alchemy' },
     forge:  { name: '装備の新調',       trust: 4, desc: '金貨を払い、この英雄に新しい装備を作る', need: 'armory' },
   };
@@ -437,9 +438,67 @@
     armory:   { name: '武器倉庫', icon: '⚔️', start: 0, desc: '装備を作る。良い装備を作れるようになる' },
     alchemy:  { name: '錬金場',   icon: '🧪', start: 0, desc: '薬を作る。持っていける数が増える' },
   };
-  const BUILDING_ORDER = ['gate', 'dorm', 'plaza', 'training', 'strategy', 'fusion', 'armory', 'alchemy'];
+  // 第6版: 物資を作る施設（城壁の外側に広げた陣地に建つ）
+  BUILDINGS.farm =   { name: '畑',     icon: '🌾', start: 1, prod: true, desc: '食料を作る。働く英雄が多いほど増える' };
+  BUILDINGS.lumber = { name: '石切り場', icon: '🪵', start: 1, prod: true, desc: '木材と石材を作る。建設と陣地に使う' };
+  BUILDINGS.mine =   { name: '鉱山',   icon: '⛏️', start: 0, prod: true, desc: '鉱石と魔石を掘る。装備と薬に使う' };
+  const BUILDING_ORDER = ['gate', 'dorm', 'plaza', 'training', 'strategy', 'fusion', 'armory', 'alchemy', 'farm', 'lumber', 'mine'];
+  const PROD_BUILDINGS = ['farm', 'lumber', 'mine'];
   const BUILDING_MAX = 5;
   const BUILD_COST = { 1: 300, 2: 800, 3: 2000, 4: 4500, 5: 9000 };  // そのレベルにするのに必要な金貨
+  const BUILD_RES = {                                                  // そのレベルにするのに必要な物資
+    1: { wood: 40 }, 2: { wood: 120 }, 3: { wood: 300, ore: 60 }, 4: { wood: 650, ore: 180 }, 5: { wood: 1200, ore: 400, mana: 80 },
+  };
+
+  // ---------- 第6版: 物資（現実の時間で少しずつ作られる） ----------
+  const RESOURCES = {
+    food: { name: '食料',       icon: '🍞', short: '食' },
+    wood: { name: '木材と石材', icon: '🪵', short: '材' },
+    ore:  { name: '鉱石',       icon: '🪨', short: '鉱' },
+    mana: { name: '魔石',       icon: '🔮', short: '魔' },
+  };
+  const RES_KEYS = ['food', 'wood', 'ore', 'mana'];
+  const START_RES = { food: 120, wood: 80, ore: 20, mana: 10 };
+  // 1分（待機室の時間1つ）あたりにできる量 = 施設 Lv × base + 働いている英雄1人あたり worker
+  const PRODUCTION = {
+    farm:   { food: { base: 0.45, worker: 0.35 } },
+    lumber: { wood: { base: 0.35, worker: 0.3 } },
+    mine:   { ore: { base: 0.25, worker: 0.22 }, mana: { base: 0.07, worker: 0.06 } },
+  };
+  const FOOD_PER_HERO = 0.04;          // 英雄1人が1分に食べる量（足りないと空腹になり、訓練で伸びず信頼度が下がる）
+  const RATION_PER_HERO = 4;           // 塔へ出かけるときに持っていく食料（1人あたり）。足りないと空腹で戦う
+
+  // ---------- 第6版: 陣地（城壁と見張り塔。物資で広げる） ----------
+  const FORT = {
+    wall:  { name: '城壁',     icon: '🧱', max: 5, desc: '陣地を広げる。物資をためておける量が増え、生産施設のレベルの上限が上がる' },
+    tower: { name: '見張り塔', icon: '🗼', max: 5, desc: '塔の偵察。入ったときに見える範囲が広がり、Lv3 から手掛かりの場所、Lv5 から魔物の巣がはじめからわかる' },
+  };
+  const FORT_COST = {                  // そのレベルにするのに必要なもの
+    wall:  [null, null, { gold: 400, wood: 150 }, { gold: 1200, wood: 400, ore: 80 }, { gold: 3000, wood: 900, ore: 250 }, { gold: 7000, wood: 1800, ore: 600, mana: 120 }],
+    tower: [null, { gold: 300, wood: 100 }, { gold: 800, wood: 250, ore: 40 }, { gold: 2000, wood: 500, ore: 150 }, { gold: 4500, wood: 1000, ore: 350, mana: 60 }, { gold: 9000, wood: 1800, ore: 700, mana: 150 }],
+  };
+  const FORT_REQ = [0, 0, 5, 20, 45, 70];                       // そのレベルにするのに必要なクリア階数
+  const RES_CAP = [0, 400, 900, 1800, 3500, 6000];              // 城壁のレベルごとの、物資をためておける量（種類ごと）
+  const WALL_RADIUS = [0, 19, 21.5, 24, 26.5, 29];               // 待機室の城壁の大きさ（立体の表示）
+
+  // ---------- 第6版: 曜日のダンジョン（現実の曜日で入れる場所が変わる。1日に3回まで） ----------
+  const DAILY = [
+    { day: 0, name: '黄金の回廊',   icon: '🪙', zone: 7, reward: { gold: 900 },             desc: '金貨がたくさん手に入る' },
+    { day: 1, name: '実りの森',     icon: '🍞', zone: 0, reward: { food: 260 },             desc: '食料がたくさん手に入る' },
+    { day: 2, name: '炎の坑道',     icon: '🪨', zone: 5, reward: { ore: 200 },              desc: '鉱石がたくさん手に入る' },
+    { day: 3, name: '魔石の泉',     icon: '🔮', zone: 6, reward: { mana: 70 },              desc: '魔石がたくさん手に入る' },
+    { day: 4, name: '古代樹の森',   icon: '🪵', zone: 3, reward: { wood: 300 },             desc: '木材と石材がたくさん手に入る' },
+    { day: 5, name: '星屑の聖堂',   icon: '✨', zone: 8, reward: { shards: 40, gems: 60 },  desc: '星のかけらと魔晶石が手に入る' },
+    { day: 6, name: '修練の迷宮',   icon: '📘', zone: 4, reward: { exp: 2.5, food: 80, wood: 80, ore: 50, mana: 15 }, desc: '経験値が多く、物資も少しずつ手に入る' },
+  ];
+  const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+  const DAILY_TIERS = [                                           // 難しさ（クリアした階数で選べるようになる）
+    { name: '初級', req: 3,  lv: 4,  mult: 1 },
+    { name: '中級', req: 25, lv: 30, mult: 2 },
+    { name: '上級', req: 55, lv: 60, mult: 3.2 },
+    { name: '超級', req: 85, lv: 88, mult: 4.5 },
+  ];
+  const DAILY_TRIES = 3;
   const BUILD_REQ = { 1: 0, 2: 10, 3: 25, 4: 50, 5: 75 };            // そのレベルにするのに必要なクリア階数
   const DORM_CAP = [0, 12, 15, 18, 21, 24];
   const TRAINING_SHARE = [0, 0.2, 0.35, 0.5, 0.65, 0.8];
@@ -455,19 +514,19 @@
   // ---------- 装備（武器倉庫で作る。倒れた英雄の装備は一緒に失われる） ----------
   const EQUIP_TIERS = [
     null,
-    { name: '鉄',       atk: 0.08, def: 0.08, hp: 0.06, cost: 200 },
-    { name: '鋼',       atk: 0.16, def: 0.16, hp: 0.12, cost: 600 },
-    { name: '銀',       atk: 0.25, def: 0.25, hp: 0.18, cost: 1500 },
-    { name: 'ミスリル', atk: 0.35, def: 0.35, hp: 0.25, cost: 3500 },
-    { name: '星鉄',     atk: 0.5,  def: 0.5,  hp: 0.35, cost: 8000 },
+    { name: '鉄',       atk: 0.08, def: 0.08, hp: 0.06, cost: 200, ore: 25 },
+    { name: '鋼',       atk: 0.16, def: 0.16, hp: 0.12, cost: 600, ore: 70 },
+    { name: '銀',       atk: 0.25, def: 0.25, hp: 0.18, cost: 1500, ore: 160 },
+    { name: 'ミスリル', atk: 0.35, def: 0.35, hp: 0.25, cost: 3500, ore: 350, mana: 30 },
+    { name: '星鉄',     atk: 0.5,  def: 0.5,  hp: 0.35, cost: 8000, ore: 700, mana: 80 },
   ];
   const EQUIP_KINDS = { weapon: { name: '武器', icon: '🗡️' }, armor: { name: '防具', icon: '🛡️' } };
 
   // ---------- 薬（錬金場で作る。戦闘中、英雄が自分で使う） ----------
   const POTIONS = {
-    styptic: { name: '止血薬', icon: '🩹', cures: 'bleed', cost: 80,  lv: 1, desc: '出血を止める' },
-    calm:    { name: '鎮静薬', icon: '🌿', cures: 'fear',  cost: 80,  lv: 2, desc: '恐怖をしずめる' },
-    heal:    { name: '回復薬', icon: '🧪', cures: null,    cost: 150, lv: 3, desc: 'HP が 30% を切ったら 40% 回復' },
+    styptic: { name: '止血薬', icon: '🩹', cures: 'bleed', cost: 80,  mana: 4, lv: 1, desc: '出血を止める' },
+    calm:    { name: '鎮静薬', icon: '🌿', cures: 'fear',  cost: 80,  mana: 4, lv: 2, desc: '恐怖をしずめる' },
+    heal:    { name: '回復薬', icon: '🧪', cures: null,    cost: 150, mana: 8, lv: 3, desc: 'HP が 30% を切ったら 40% 回復' },
   };
 
   // ---------- 第5版: 才能・訓練・仲・時間 ----------
@@ -509,6 +568,24 @@
     survive: { name: '生存', desc: '押し寄せる魔物から90秒耐え抜け' },
     boss:    { name: '主の討伐', desc: 'この階の主を倒せ' },
   };
+  // 第6版: 任務の手掛かり。調べた手掛かりの点数が CLUE_NEED に届くと、任務が判明する
+  const CLUES = {
+    tracks: { name: '足跡',         pts: 1, verb: '足跡を見つけた',         hint: 0 },
+    note:   { name: '書き置き',     pts: 1, verb: '書き置きを拾った',       hint: 1 },
+    corpse: { name: '冒険者の亡骸', pts: 1, verb: '冒険者の亡骸を調べた',   hint: 2 },
+    mural:  { name: '壁画',         pts: 2, verb: '壁画を読み解いた',       hint: 3 },
+    stele:  { name: '石碑',         pts: 2, verb: '石碑を調べた',           hint: 3 },
+    npc:    { name: '人影',         pts: 2, verb: '{npc}から話を聞いた',   hint: 3 },
+  };
+  const CLUE_NEED = 2;
+  const CLUE_HINTS = {
+    hunt:    ['魔物の群れの足跡が、いくつもの巣へ続いている', '「巣を潰さないかぎり、扉は開かない」と書いてある', '巣から出てきた魔物に襲われたらしい'],
+    relic:   ['光るかけらが落ちている。ほかにもありそうだ', '「遺物を3つ集めた者に扉は開く」と書いてある', '遺物のかけらを握りしめたまま倒れている'],
+    escort:  ['小さな足跡が、助けを求めるように奥へ続いている', '「誰か、わたしをここから連れ出して」と書いてある', '生存者をかばって倒れたらしい'],
+    explore: ['足跡が壁の前で消えている。隠された道がある', '「出口は隠されている。歩いて探せ」と書いてある', '地図の切れはしに、隠された出口の印がある'],
+    survive: ['大群が通った跡がある。ここで迎え撃つしかない', '「魔物の波を耐えた者だけが進める」と書いてある', '魔物の大群に飲まれたらしい'],
+    boss:    ['巨大な足跡がある。この階の主のものだ', '「主を倒せ。それが扉の鍵」と書いてある', '巨大な爪の跡が残っている'],
+  };
   const NPCS = [
     { name: '生き残りの兵士', kind: 'npc' }, { name: '迷子の子ども', kind: 'npc' }, { name: '旅の商人', kind: 'npc' },
     { name: '亡霊の騎士', kind: 'npc' }, { name: '年老いた巡礼者', kind: 'npc' }, { name: '石碑', kind: 'stele' },
@@ -535,6 +612,8 @@
     PLAZA_CHANCE, PLAZA_MAX, FUSION_COST, POTION_CAP, TACTIC_UNLOCK, CMD_COST, BASE_NAMES, EQUIP_TIERS, EQUIP_KINDS, POTIONS, ORDERS,
     STAT_KEYS, STAT_NAMES, TALENT_NAMES, TALENT_MULT, TALENT_CAP, TALENT_TOTAL, TICK_MS, OFFLINE_MAX_TICKS, TRAIN_GAIN, INJURY_TICKS,
     REL_COMPAT, QUARREL, MISSIONS, NPCS, WORLD_HEADS, WORLD_TAILS,
+    PROD_BUILDINGS, BUILD_RES, RESOURCES, RES_KEYS, START_RES, PRODUCTION, FOOD_PER_HERO, RATION_PER_HERO,
+    FORT, FORT_COST, FORT_REQ, RES_CAP, WALL_RADIUS, DAILY, DAY_NAMES, DAILY_TIERS, DAILY_TRIES, CLUES, CLUE_NEED, CLUE_HINTS,
     zoneOfFloor: (fi) => ZONES[Math.floor(fi / FLOORS_PER_ZONE)],
     heroById: Object.fromEntries(HEROES.map(h => [h.id, h])),
   };

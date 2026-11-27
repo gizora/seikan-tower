@@ -1,5 +1,5 @@
 /* 星喚の塔 — オフラインでも遊べるようにファイルを保存しておく */
-const CACHE = 'seikan-tower-v5';
+const CACHE = 'seikan-tower-v6';
 const FILES = [
   './', './index.html', './css/style.css',
   './js/lib/three.min.js', './js/lib/Pass.js', './js/lib/CopyShader.js', './js/lib/LuminosityHighPassShader.js', './js/lib/HorizontalTiltShiftShader.js',

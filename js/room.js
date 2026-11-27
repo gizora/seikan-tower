@@ -6,8 +6,11 @@
   const S = root.Sprites;
   const D = root.GameData;
 
-  const WALL_R = 15.5;
+  let WALL_R = 19;                 // 城壁の大きさ（第6版: 城壁のレベルで広がる）
   const PLOTS = {
+    farm:     { x: -13.2, z: 10.8 },
+    lumber:   { x: 13.2, z: 10.8 },
+    mine:     { x: 0,    z: 16.2 },
     gate:     { x: 0,    z: -13.4 },
     plaza:    { x: 0,    z: 0 },
     fusion:   { x: -7.6, z: -7.4 },
@@ -26,6 +29,8 @@
   let levels = {};
   let fxList = [];
   let memorialGroup = null;
+  let fortGroup = null, groundGroup = null;
+  let fortLv = { wall: 1, tower: 0 };
   let t = 0;
   let portalTex = null, portalCanvas = null, waterTex = null;
   const lights = [];
@@ -105,12 +110,26 @@
   // ---------- 地面・城壁・道 ----------
   function buildGround() {
     const s = world.scene;
-    const outer = new THREE.Mesh(new THREE.CircleGeometry(60, 48), new THREE.MeshLambertMaterial({ color: 0x2a2a30 }));
+    const outer = new THREE.Mesh(new THREE.CircleGeometry(70, 48), new THREE.MeshLambertMaterial({ color: 0x2a2a30 }));
     outer.rotation.x = -Math.PI / 2; outer.position.y = -0.05; outer.receiveShadow = true;
     s.add(outer);
-    const gtex = W3.TEX.grass().clone(); gtex.needsUpdate = true; gtex.repeat.set(30, 30);
+    // 遠くの塔（世界の中心にそびえる）
+    const tower = cyl(2.2, 3, 40, new THREE.MeshLambertMaterial({ color: 0x1a1628 }), 0, 0, -56, 8);
+    s.add(tower);
+    const tl = new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
+    tl.position.set(0, 41, -56); s.add(tl);
+  }
+
+  // ---------- 陣地（地面・道・城壁・見張り塔）。城壁のレベルで広がる ----------
+  function buildFort() {
+    if (fortGroup) { world.scene.remove(fortGroup); fortGroup = null; }
+    const s = new THREE.Group();
+    fortGroup = s;
+    WALL_R = D.WALL_RADIUS[fortLv.wall] || 19;
+    const gtex = W3.TEX.grass().clone(); gtex.needsUpdate = true; gtex.repeat.set(WALL_R * 2, WALL_R * 2);
     const ground = new THREE.Mesh(new THREE.CircleGeometry(WALL_R, 64), new THREE.MeshLambertMaterial({ map: gtex }));
     ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
+    ground.userData.ground = true;
     s.add(ground);
     // 石畳の道（広場から各区画へ）
     const ptex = W3.TEX.stone().clone(); ptex.needsUpdate = true;
@@ -124,24 +143,44 @@
       road.receiveShadow = true;
       s.add(road);
     }
-    // 城壁（ぐるりと一周。北に次元の門のすき間）
-    const segs = 56;
+    // 城壁（ぐるりと一周。北に門のすき間）。レベルが上がると高く・厚くなる
+    const wl = fortLv.wall;
+    const wh = 2.2 + (wl - 1) * 0.45, wd = 0.9 + (wl - 1) * 0.12;
+    const wallMat = wl >= 3 ? M.brick : M.stone;
+    const segs = Math.round(WALL_R * 3.6);
+    const segW = 2 * Math.PI * WALL_R / segs + 0.12;
+    const gap = 2.8;
     for (let i = 0; i < segs; i++) {
       const a = i / segs * Math.PI * 2;
       const x = Math.sin(a) * WALL_R, z = -Math.cos(a) * WALL_R;
-      if (Math.abs(x) < 2.6 && z < 0) continue;
-      const seg = box(1.9, 2.2, 0.9, M.stone, 0, 0, 0);
-      seg.position.set(x, 1.1, z);
+      if (Math.abs(x) < gap && z < 0) continue;
+      const seg = box(segW, wh, wd, wallMat, 0, 0, 0);
+      seg.position.set(x, wh / 2, z);
       seg.rotation.y = -a;
       s.add(seg);
-      if (i % 2 === 0) { const c = box(0.55, 0.5, 0.95, M.stone); c.position.set(x, 2.45, z); c.rotation.y = -a; s.add(c); }
-      if (i % 14 === 7) { const tw = cyl(1.1, 1.2, 3.6, M.stone, x, 0, z, 8); s.add(tw); const tr = new THREE.Mesh(new THREE.ConeGeometry(1.4, 1.4, 8), M.roofSlate); tr.position.set(x, 4.3, z); tr.castShadow = true; s.add(tr); }
+      if (i % 2 === 0) { const c = box(0.55, 0.5, wd + 0.05, M.stone); c.position.set(x, wh + 0.25, z); c.rotation.y = -a; s.add(c); }
     }
-    // 遠くの塔（世界の中心にそびえる）
-    const tower = cyl(2.2, 3, 40, new THREE.MeshLambertMaterial({ color: 0x1a1628 }), 0, 0, -48, 8);
-    s.add(tower);
-    const tl = new THREE.Mesh(new THREE.SphereGeometry(0.8, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
-    tl.position.set(0, 41, -48); s.add(tl);
+    // 門の両わきの塔
+    for (const sx of [-1, 1]) {
+      const gx = sx * (gap + 0.4), gz = -Math.sqrt(Math.max(0, WALL_R * WALL_R - gx * gx));
+      s.add(cyl(1.0, 1.1, wh + 1.4, M.stone, gx, 0, gz, 8));
+      const tr = new THREE.Mesh(new THREE.ConeGeometry(1.25, 1.2, 8), M.roofSlate); tr.position.set(gx, wh + 2, gz); tr.castShadow = true; s.add(tr);
+    }
+    // 見張り塔（レベルの数だけ、城壁の上に建つ）
+    const n = fortLv.tower;
+    for (let i = 0; i < n; i++) {
+      const a = Math.PI * (0.25 + 1.5 * (n === 1 ? 0.5 : i / (n - 1)));
+      const x = Math.sin(a) * WALL_R, z = -Math.cos(a) * WALL_R;
+      const th = wh + 3.4 + n * 0.25;
+      s.add(cyl(0.95, 1.2, th, M.stone, x, 0, z, 8));
+      s.add(box(2.3, 0.25, 2.3, M.wood, x, th, z));
+      for (const [px, pz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) s.add(box(0.12, 1.2, 0.12, M.wood, x + px * 1, th + 0.25, z + pz * 1));
+      const tr = new THREE.Mesh(new THREE.ConeGeometry(1.7, 1.4, 4), M.roofRed); tr.rotation.y = Math.PI / 4; tr.position.set(x, th + 2.1, z); tr.castShadow = true; s.add(tr);
+      addLight(s, 0xffb060, x, th + 0.9, z, 8, 1.3);
+      addFx('fire/torch', x, th + 0.35, z, 1 / 52);
+    }
+    s.traverse(o => { if (!o.userData.ground) o.userData.key = 'fort'; });
+    world.scene.add(s);
   }
 
   // ---------- 施設（レベルで大きく立派になる） ----------
@@ -230,6 +269,38 @@
         g.add(box(0.8, 0.6, 0.4, M.metal, 1, 0, d / 2 + 0.8));
         addLight(g, 0xff7a30, 0.3, 0.8, d / 2 + 0.8, 5, 1.3);
         { const f = Math.atan2(-p.x, -p.z); addFx('fire/campfire', p.x + Math.sin(f) * 2.4 + Math.cos(f) * 1.2, 0.02, p.z + Math.cos(f) * 2.4 - Math.sin(f) * 1.2, 1 / 44); }
+      } else if (key === 'farm') {
+        // 畑: 畝（うね）と作物、小さな納屋
+        const fw = 3.6 + lv * 0.5, fd = 3.2 + lv * 0.3;
+        g.add(box(fw, 0.08, fd, M.dirt, 0, 0, 0.6));
+        const rows = 3 + Math.min(3, lv);
+        const crop = new THREE.MeshLambertMaterial({ color: lv >= 3 ? 0xd8c050 : 0x6aa040 });
+        for (let i = 0; i < rows; i++) {
+          const z = 0.6 - fd / 2 + 0.4 + i * (fd - 0.8) / Math.max(1, rows - 1);
+          g.add(box(fw - 0.5, 0.18, 0.3, M.dirt, 0, 0.06, z));
+          for (let j = 0; j < 5; j++) g.add(box(0.28, 0.42, 0.28, crop, -fw / 2 + 0.6 + j * (fw - 1.2) / 4, 0.2, z));
+        }
+        g.add(box(1.8, 1.5, 1.4, M.wood, 0, 0, -fd / 2 - 0.4));
+        g.add(gable(1.8, 1.4, 0.9, M.roofRed, 1.5).translateZ(-fd / 2 - 0.4));
+        if (lv >= 2) { const mill = cyl(0.5, 0.6, 2.4, M.plaster, fw / 2 - 0.2, 0, -fd / 2 - 0.4, 8); g.add(mill); }
+      } else if (key === 'lumber') {
+        // 石切り場: 丸太の山・切り出した石・作業小屋
+        g.add(box(4.4, 0.05, 3.6, M.sand));
+        for (let i = 0; i < 2 + lv; i++) { const log = cyl(0.22, 0.22, 2.2, M.wood, -1.2 + (i % 3) * 0.48, 0.22 + Math.floor(i / 3) * 0.4, 0.9, 8); log.rotation.z = Math.PI / 2; log.position.y = 0.22 + Math.floor(i / 3) * 0.4; g.add(log); }
+        for (let i = 0; i < 1 + lv; i++) g.add(box(0.6, 0.5, 0.6, M.stone, 1.0 + (i % 2) * 0.7, Math.floor(i / 2) * 0.5, -0.4 + (i % 3) * 0.2));
+        g.add(box(2.2, 1.6, 1.4, M.wood, -0.6, 0, -1.2));
+        g.add(gable(2.2, 1.4, 0.8, M.roofSlate, 1.6).translateX(-0.6).translateZ(-1.2));
+        g.add(box(0.12, 1.4, 0.12, M.metal, 1.6, 0, 1.2));
+      } else if (key === 'mine') {
+        // 鉱山: 岩山と坑道の入口、トロッコ、魔石の光
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(2.2 + lv * 0.2, 0), W3.mat(W3.TEX.rock(['#5a5560', '#4e4a54', '#66626c'])));
+        rock.position.set(0, 1.1, -0.8); rock.scale.y = 0.75; rock.castShadow = true; rock.receiveShadow = true; g.add(rock);
+        g.add(box(1.3, 1.5, 0.3, M.dark, 0, 0, 1.0));
+        g.add(box(0.18, 1.7, 0.18, M.wood, -0.75, 0, 1.15)); g.add(box(0.18, 1.7, 0.18, M.wood, 0.75, 0, 1.15)); g.add(box(1.7, 0.2, 0.22, M.wood, 0, 1.6, 1.15));
+        g.add(box(0.9, 0.5, 0.6, M.metal, 1.6, 0.1, 1.8));
+        const crystal = new THREE.MeshBasicMaterial({ color: 0x9a7aff });
+        for (let i = 0; i < Math.min(5, lv + 1); i++) { const c = new THREE.Mesh(new THREE.OctahedronGeometry(0.25), crystal); c.position.set(-1.6 + i * 0.5, 0.5 + (i % 2) * 0.3, 0.9); c.scale.y = 1.8; g.add(c); }
+        addLight(g, 0x9a7aff, 0, 0.8, 1.6, 5, 1.0);
       } else if (key === 'alchemy') {
         const w = 3.2 * k, h = 2 + lv * 0.35;
         g.add(box(w, h, w, M.wood));
@@ -270,10 +341,11 @@
     const p = PLOTS;
     if (info.quarrel) { const o = heroes[info.quarrel]; if (o) return { x: (h.x + o.x) / 2 + (h.x < o.x ? -0.6 : 0.6), z: (h.z + o.z) / 2 }; }
     switch (info.activity) {
+      case 'work': { const w = info.work && p[info.work]; return w && levels[info.work] > 0 ? { x: w.x + rnd(-1.6, 1.6), z: w.z + rnd(-0.5, 2.2), act: 'work' } : null; }
       case 'train': return (levels.training > 0) ? { x: p.training.x + rnd(-2, 2), z: p.training.z + rnd(-0.5, 2.6), act: 'train' } : null;
       case 'social': { const a = rnd(0, Math.PI * 2); return { x: Math.sin(a) * rnd(2.4, 3.6), z: Math.cos(a) * rnd(2.4, 3.6), act: 'social' }; }
       case 'rest': { const f = Math.atan2(-p.dorm.x, -p.dorm.z); return { x: p.dorm.x + Math.sin(f) * 2.4 + rnd(-1, 1), z: p.dorm.z + Math.cos(f) * 2.4 + rnd(-1, 1), act: 'rest' }; }
-      default: { const a = rnd(0, Math.PI * 2), r = rnd(4, 11); return { x: Math.sin(a) * r, z: Math.cos(a) * r, act: 'wander' }; }
+      default: { const a = rnd(0, Math.PI * 2), r = rnd(4, Math.min(12, WALL_R - 4)); return { x: Math.sin(a) * r, z: Math.cos(a) * r, act: 'wander' }; }
     }
   }
 
@@ -291,7 +363,7 @@
     if (h.icon) { world.scene.remove(h.icon); h.icon = null; }
     h.iconKey = key;
     if (!key) return;
-    const spec = { proposal: ['!', '#ffd040'], quarrel: ['怒', '#ff5a5a'], injured: ['✚', '#ff8a8a'], train: ['剣', '#e8e8f0'], rest: ['Z', '#a8c8ff'], social: ['…', '#ffffff'] }[key];
+    const spec = { proposal: ['!', '#ffd040'], quarrel: ['怒', '#ff5a5a'], injured: ['✚', '#ff8a8a'], train: ['剣', '#e8e8f0'], rest: ['Z', '#a8c8ff'], social: ['…', '#ffffff'], work: ['鎚', '#ffd890'], hungry: ['腹', '#ffb070'] }[key];
     if (!spec) return;
     h.icon = W3.iconSprite(spec[0], spec[1], key === 'proposal' || key === 'quarrel' ? 0.7 : 0.5);
     world.scene.add(h.icon);
@@ -301,8 +373,15 @@
     const lv = {};
     for (const b of opts.getBuildings()) lv[b.key] = b.lv;
     const fallen = opts.fallenCount();
-    const key = JSON.stringify(lv) + ':' + (fallen > 0);
-    if (key !== sync.key) { sync.key = key; rebuildPlots(lv, fallen); }
+    const fort = opts.getFort ? opts.getFort() : { wall: 1, tower: 0 };
+    const key = JSON.stringify(lv) + ':' + (fallen > 0) + ':' + fort.wall + ':' + fort.tower;
+    if (key !== sync.key) {
+      sync.key = key;
+      fortLv = { wall: fort.wall, tower: fort.tower };
+      rebuildPlots(lv, fallen);
+      buildFort();
+      world.cam.bounds = WALL_R - 4;
+    }
     const list = opts.getHeroes();
     const ids = new Set(list.map(x => x.id));
     for (const id of Object.keys(heroes)) if (!ids.has(id)) { const h = heroes[id]; world.scene.remove(h.mesh); world.scene.remove(h.shadow); if (h.icon) world.scene.remove(h.icon); delete heroes[id]; }
@@ -354,6 +433,7 @@
       let pose = 'idle' + (Math.floor(t * 1.6 + h.phase) % 2);
       if (h.moving) pose = 'walk' + (Math.floor(t * 8 + h.phase) % 4);
       else if (h.arrived === 'train') pose = Math.floor(t * 2.5 + h.phase) % 2 ? 'atk1' : 'atk0';
+      else if (h.arrived === 'work') pose = Math.floor(t * 1.8 + h.phase) % 2 ? 'atk0' : 'idle0';
       else if (info.quarrel) pose = Math.floor(t * 3) % 2 ? 'atk0' : 'hurt';
       W3.setBillboardCanvas(h.mesh, S.heroCanvas(h.id, pose), h.face < 0);
       const shake = info.quarrel ? Math.sin(t * 30) * 0.03 : 0;
@@ -361,7 +441,7 @@
       h.mesh.rotation.y = world.cam.az;
       if (h.alpha < 1) { h.alpha = Math.min(1, h.alpha + dt * 0.8); h.mesh.material.opacity = h.alpha; }
       h.shadow.position.set(h.x, 0.02, h.z);
-      const ik = info.quarrel ? 'quarrel' : info.proposal ? 'proposal' : info.injured ? 'injured' : (h.arrived && !h.moving ? (h.arrived === 'train' ? 'train' : h.arrived === 'rest' ? 'rest' : '') : '');
+      const ik = info.quarrel ? 'quarrel' : info.proposal ? 'proposal' : info.injured ? 'injured' : (h.arrived && !h.moving ? (h.arrived === 'train' ? 'train' : h.arrived === 'rest' ? 'rest' : h.arrived === 'work' ? 'work' : '') : '');
       setIcon(h, ik);
       if (h.icon) h.icon.position.set(h.x, HERO_H + 0.5 + Math.sin(t * 3 + h.phase) * 0.06, h.z);
       if (h.selected) h.shadow.material.color.set(0xffe27a); else h.shadow.material.color.set(0xffffff);
@@ -377,7 +457,7 @@
       opts.onHero(id);
       return;
     }
-    const objs = Object.values(plotGroups).concat(memorialGroup ? [memorialGroup] : []);
+    const objs = Object.values(plotGroups).concat(memorialGroup ? [memorialGroup] : [], fortGroup ? [fortGroup] : []);
     const b = ev.pick(objs)[0];
     if (b && b.object.userData.key) { if (b.object.userData.key === 'memorial') opts.onMemorial && opts.onMemorial(); else opts.onBuilding(b.object.userData.key); }
   }
@@ -389,7 +469,7 @@
       if (world) { world.dispose(); world = null; heroes = {}; sync.key = ''; }
       container = el;
       mats();
-      world = W3.createWorld(el, { dist: 30, az: 0.55, pol: 0.88, fov: 30, minDist: 12, maxDist: 46, bounds: 13, shadowSize: 22, onTap });
+      world = W3.createWorld(el, { dist: 32, az: 0.55, pol: 0.88, fov: 30, minDist: 12, maxDist: 58, bounds: 15, shadowSize: 26, onTap });
       buildGround();
       sync.key = ''; sync.started = false;
       sync();
@@ -408,6 +488,7 @@
     follow(id) { const h = heroes[id]; if (h && world) world.cam.follow = () => new THREE.Vector3(h.x, 0, h.z); },
     debug() { return Object.values(heroes).map(h => ({ id: h.id, x: +h.x.toFixed(2), z: +h.z.toFixed(2), act: h.act, moving: h.moving })); },
     screenPos(id) { const h = heroes[id]; return h && world ? world.toScreen(new THREE.Vector3(h.x, 1.0, h.z)) : null; },
+    fortPos() { if (!world) return null; const a = Math.PI * 0.75; return world.toScreen(new THREE.Vector3(Math.sin(a) * WALL_R, 1.4, -Math.cos(a) * WALL_R)); },
     plotPos(key) { const p = key === 'memorial' ? MEMORIAL : PLOTS[key]; return p && world ? world.toScreen(new THREE.Vector3(p.x, key === 'training' ? 0.4 : 1.2, p.z)) : null; },
     get world() { return world; },
   };

@@ -7,7 +7,7 @@
   const HG = isNode ? require('./herogen.js') : root.HeroGen;
 
   const SAVE_KEY = 'seikan-tower-save-v1';
-  const VERSION = 5;
+  const VERSION = 6;
 
   function expToNext(lv) { return 30 + 25 * (lv - 1); }
   const isBossFloor = (fi) => (fi + 1) % D.FLOORS_PER_ZONE === 0;
@@ -30,7 +30,7 @@
     const traits = [];
     for (let i = 0; i < traitSlots(def.rarity); i++) traits.push({ id: randomTrait(rng, traits.map(t => t.id)), lv: 1 });
     return { lv: 1, exp: 0, star: def.rarity, trust: D.PERSONALITIES[def.pers].trust, traits, equip: { weapon: 0, armor: 0 },
-      bonus: { hp: 0, atk: 0, def: 0, spd: 0 }, injured: 0, activity: 'wander', joined: Date.now() };
+      bonus: { hp: 0, atk: 0, def: 0, spd: 0 }, injured: 0, activity: 'wander', work: null, joined: Date.now() };
   }
 
   function rollDifficulty(rng) {
@@ -41,6 +41,16 @@
     return 'normal';
   }
   function randomBaseName(rng) { return HG.worldName(rng); }
+  /** 現実の日付（その日の曜日のダンジョンの回数を数える） */
+  function dayKey(now) { const d = new Date(now || Date.now()); return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate(); }
+  /** 費用の表（{ gold, wood, ore, mana, food }）を「🪙300 🪵40」の形にする */
+  function costText(cost) {
+    if (!cost) return '';
+    const out = [];
+    if (cost.gold) out.push('🪙' + cost.gold);
+    for (const k of D.RES_KEYS) if (cost[k]) out.push(D.RESOURCES[k].icon + cost[k]);
+    return out.join(' ');
+  }
   const relKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
   /** 英雄の定義を登録する（自動で作った英雄も D.heroById から引けるようにする） */
   function registerDef(def) { D.heroById[def.id] = def; if (!def.talents) def.talents = HG.talentsFor(def); return def; }
@@ -78,7 +88,7 @@
       tactics: Object.assign({}, D.DEFAULT_TACTICS),
       cleared: 0,
       pity: 0,
-      speed: 2,
+      speed: 1,
       seenIntro: false,
       seenDeathWarning: false,
       fallen: [],                                   // 慰霊碑: 倒れた英雄の記録
@@ -101,6 +111,11 @@
       clock: { last: Date.now(), ticks: 0 },        // 待機室の時間
       log: [],                                      // 待機室で起きたこと
       seed: 1 + Math.floor(Math.random() * 99999),  // 塔のマップの種
+      // 第6版
+      res: Object.assign({}, D.START_RES),          // 物資（食料・木材と石材・鉱石・魔石）
+      fort: { wall: 1, tower: 0 },                  // 陣地（城壁・見張り塔）
+      daily: { day: '', tries: 0 },                 // 曜日のダンジョンに入った回数（その日の分）
+      hungry: false,                                // 食料が尽きている
     };
   }
 
@@ -118,6 +133,7 @@
     for (const k of D.STAT_KEYS) out.bonus[k] = Math.max(0, Math.min(1, Number(b[k]) || 0));
     out.injured = Math.max(0, int(h.injured, 0));
     out.activity = typeof h.activity === 'string' ? h.activity : 'wander';
+    out.work = typeof h.work === 'string' ? h.work : null;
     out.joined = int(h.joined, Date.now());
     out.star = Math.min(D.MAX_STAR, Math.max(def.rarity, int(h.star, def.rarity)));
     out.lv = Math.min(D.STARS[out.star].maxLv, Math.max(1, int(h.lv, 1)));
@@ -144,7 +160,7 @@
   /** 保存データを確かめて整える（前の版のデータもここで引き継ぐ） */
   function sanitize(s) {
     const base = newState();
-    if (!s || typeof s !== 'object' || ![1, 2, 3, 4, 5].includes(s.v)) return base;
+    if (!s || typeof s !== 'object' || ![1, 2, 3, 4, 5, 6].includes(s.v)) return base;
     const version = s.v;
     // 自動で作った英雄の定義を先に登録する
     const defs = {};
@@ -173,7 +189,7 @@
     out.gems = Math.max(0, int(s.gems, 0));
     out.gold = Math.max(0, int(s.gold, 0));
     out.pity = Math.max(0, int(s.pity, 0));
-    out.speed = [1, 2, 3].includes(s.speed) ? s.speed : 2;
+    out.speed = version < 6 ? 1 : [1, 2, 4].includes(s.speed) ? s.speed : 1;
     out.fallen = Array.isArray(s.fallen) ? s.fallen.filter(f => f && D.heroById[f.id]).slice(-50) : [];
     out.stats = Object.assign(base.stats, s.stats || {});
     out.seenDeathWarning = !!s.seenDeathWarning;
@@ -234,6 +250,18 @@
       if (typeof s.base === 'object' && /待機所/.test(String(s.base && s.base.name))) out.base.name = randomBaseName();
       for (const k of ['plaza', 'training']) out.base.buildings[k] = Math.max(1, out.base.buildings[k]);
     }
+    // 第6版: 物資・陣地・曜日のダンジョン
+    const sr = (s.res && typeof s.res === 'object') ? s.res : D.START_RES;
+    out.res = {};
+    for (const k of D.RES_KEYS) out.res[k] = Math.max(0, Number.isFinite(Number(sr[k])) ? Number(sr[k]) : D.START_RES[k]);
+    const sf = (s.fort && typeof s.fort === 'object') ? s.fort : {};
+    out.fort = { wall: Math.max(1, Math.min(5, int(sf.wall, 1))), tower: Math.max(0, Math.min(5, int(sf.tower, 0))) };
+    for (const k of D.RES_KEYS) out.res[k] = Math.min(D.RES_CAP[out.fort.wall], out.res[k]);
+    for (const k of D.PROD_BUILDINGS) out.base.buildings[k] = Math.min(out.base.buildings[k], out.fort.wall);
+    const sd = (s.daily && typeof s.daily === 'object') ? s.daily : {};
+    out.daily = { day: typeof sd.day === 'string' ? sd.day : '', tries: Math.max(0, int(sd.tries, 0)) };
+    out.hungry = !!s.hungry && out.res.food <= 0;
+    for (const id of Object.keys(out.heroes)) { const w = out.heroes[id].work; if (w && !D.PROD_BUILDINGS.includes(w)) out.heroes[id].work = null; }
     // 戦略室でまだ使えない作戦は、ふつうの作戦にそろえる
     for (const key of Object.keys(D.TACTICS)) {
       if (D.TACTIC_UNLOCK[key] > out.base.buildings.strategy) out.tactics[key] = D.DEFAULT_TACTICS[key];
@@ -302,7 +330,7 @@
       if (ticks <= 0) return null;
       const capped = ticks > D.OFFLINE_MAX_TICKS;
       ticks = Math.min(ticks, D.OFFLINE_MAX_TICKS);
-      const sum = { ticks, gains: {}, quarrels: 0, proposals: 0, healed: [], noTalent: {} };
+      const sum = { ticks, gains: {}, quarrels: 0, proposals: 0, healed: [], noTalent: {}, res: {}, hungry: false };
       for (let i = 0; i < ticks; i++) this.tick(sum, online);
       s.clock.last = capped ? now : s.clock.last + ticks * D.TICK_MS;
       s.clock.ticks += ticks;
@@ -315,23 +343,30 @@
     /** 待機室の時間を1つ（1分）進める */
     tick(sum, online) {
       const s = this.state;
+      for (const [k, v] of Object.entries({ gains: {}, quarrels: 0, proposals: 0, healed: [], noTalent: {}, res: {} })) if (sum[k] == null) sum[k] = v;
       const ids = Object.keys(s.heroes);
       const trainLv = this.buildingLv('training');
       const places = {};
+      const prodBuilt = D.PROD_BUILDINGS.filter(k => this.buildingLv(k) > 0);
+      const workers = {};
       for (const id of ids) {
         const h = s.heroes[id];
         const def = D.heroById[id];
         if (h.injured > 0) { h.injured--; h.activity = 'rest'; if (h.injured === 0) sum.healed.push(id); continue; }
-        // 何をするかは性格で決まる（勝手に訓練して強くなる）
-        const w = { brave: [5, 2, 1, 2], careful: [4, 2, 3, 1], loyal: [4, 3, 2, 1], whimsical: [2, 3, 2, 3], caring: [3, 4, 2, 1] }[def.pers];
-        const keys = ['train', 'social', 'rest', 'wander'];
+        // 何をするかは性格で決まる（勝手に訓練して強くなる・物資づくりを手伝う）
+        const w = { brave: [5, 2, 1, 2, 2], careful: [4, 2, 3, 1, 3], loyal: [4, 3, 2, 1, 4], whimsical: [2, 3, 2, 3, 1], caring: [3, 4, 2, 1, 4] }[def.pers].slice();
+        const keys = ['train', 'social', 'rest', 'wander', 'work'];
         if (trainLv <= 0) w[0] = 0;
+        if (!prodBuilt.length) w[4] = 0;
         let x = this.rng() * w.reduce((a, b) => a + b, 0), act = 'wander';
-        for (let k = 0; k < 4; k++) { x -= w[k]; if (x < 0) { act = keys[k]; break; } }
+        for (let k = 0; k < 5; k++) { x -= w[k]; if (x < 0) { act = keys[k]; break; } }
         h.activity = act;
-        const place = act === 'train' ? 'training' : act === 'social' ? 'plaza' : act === 'rest' ? 'dorm' : 'yard';
+        h.work = act === 'work' ? prodBuilt[Math.floor(this.rng() * prodBuilt.length)] : null;
+        if (h.work) workers[h.work] = (workers[h.work] || 0) + 1;
+        const place = act === 'train' ? 'training' : act === 'social' ? 'plaza' : act === 'rest' ? 'dorm' : act === 'work' ? h.work : 'yard';
         (places[place] = places[place] || []).push(id);
         if (act === 'train') {
+          if (s.hungry) continue;                                                          // おなかがすいていると訓練にならない
           const tal = this.talents(id);
           const stat = D.STAT_KEYS[Math.floor(this.rng() * 4)];
           const mult = D.TALENT_MULT[tal[stat]];
@@ -359,6 +394,131 @@
       }
       // 広場で提案が生まれることがある
       if (this.rng() < 0.02 * plazaLv && this.maybePropose(true)) sum.proposals++;
+      // 物資づくり（施設のレベルと、働いている英雄の数で決まる）
+      for (const k of prodBuilt) {
+        const lv = this.buildingLv(k);
+        for (const [r, p] of Object.entries(D.PRODUCTION[k])) {
+          const got = this.addRes(r, p.base * lv + p.worker * (workers[k] || 0));
+          sum.res[r] = (sum.res[r] || 0) + got;
+        }
+      }
+      // 英雄は食料を食べる。足りないと空腹になる
+      const eat = ids.length * D.FOOD_PER_HERO;
+      if (s.res.food >= eat) { s.res.food -= eat; sum.res.food = (sum.res.food || 0) - eat; if (s.hungry) { s.hungry = false; this.addLog('食料が届き、英雄たちの空腹がおさまった', 'info'); } }
+      else {
+        sum.res.food = (sum.res.food || 0) - s.res.food;
+        s.res.food = 0;
+        if (!s.hungry) { s.hungry = true; this.addLog('食料が尽きた。英雄たちが空腹になっている', 'hunger'); }
+        sum.hungry = true;
+        this.hungryTicks = (this.hungryTicks || 0) + 1;
+        if (this.hungryTicks % 30 === 0) for (const id of ids) s.heroes[id].trust = clampTrust(s.heroes[id].trust - 1);
+      }
+    },
+
+    // ---------- 第6版: 物資 ----------
+    resCap() { return D.RES_CAP[this.state.fort.wall]; },
+    /** 物資を足す（ためておける量まで）。実際に増えた量を返す */
+    addRes(k, n) {
+      const s = this.state;
+      const before = s.res[k] || 0;
+      s.res[k] = Math.max(0, Math.min(this.resCap(), before + n));
+      return s.res[k] - before;
+    },
+    /** 1時間あたりにできる量（今働いている英雄の数で計算） */
+    productionPerHour() {
+      const out = { food: 0, wood: 0, ore: 0, mana: 0 };
+      const workers = {};
+      for (const h of Object.values(this.state.heroes)) if (h.work) workers[h.work] = (workers[h.work] || 0) + 1;
+      for (const k of D.PROD_BUILDINGS) {
+        const lv = this.buildingLv(k);
+        if (!lv) continue;
+        for (const [r, p] of Object.entries(D.PRODUCTION[k])) out[r] += (p.base * lv + p.worker * (workers[k] || 0)) * 60;
+      }
+      out.food -= Object.keys(this.state.heroes).length * D.FOOD_PER_HERO * 60;
+      return out;
+    },
+    workersAt(k) { return Object.keys(this.state.heroes).filter(id => this.state.heroes[id].work === k); },
+    /** 費用（{ gold, food, wood, ore, mana }）を払えるか。足りないものの名前を返す（払えるなら null） */
+    lack(cost) {
+      const s = this.state;
+      if (!cost) return null;
+      if (cost.gold && s.gold < cost.gold) return 'gold';
+      for (const k of D.RES_KEYS) if (cost[k] && (s.res[k] || 0) < cost[k]) return k;
+      return null;
+    },
+    pay(cost) {
+      if (!cost || this.lack(cost)) return false;
+      if (cost.gold) this.state.gold -= cost.gold;
+      for (const k of D.RES_KEYS) if (cost[k]) this.state.res[k] -= cost[k];
+      return true;
+    },
+    costText,
+
+    // ---------- 第6版: 陣地（城壁・見張り塔） ----------
+    fortLv(k) { return this.state.fort[k] || 0; },
+    fortInfo(k) {
+      const lv = this.fortLv(k);
+      const def = D.FORT[k];
+      if (lv >= def.max) return { can: false, reason: 'max', lv };
+      const next = lv + 1;
+      const cost = D.FORT_COST[k][next];
+      const req = D.FORT_REQ[next];
+      if (this.state.cleared < req) return { can: false, reason: 'floor', lv, next, cost, req };
+      const l = this.lack(cost);
+      if (l) return { can: false, reason: l, lv, next, cost, req };
+      return { can: true, lv, next, cost, req };
+    },
+    buildFort(k) {
+      const info = this.fortInfo(k);
+      if (!info.can) return Object.assign({ ok: false }, info);
+      this.pay(info.cost);
+      this.state.fort[k] = info.next;
+      this.addLog(`${D.FORT[k].name}を Lv${info.next} にした`, 'build');
+      this.save();
+      return { ok: true, lv: info.next };
+    },
+    /** 塔へ出かけるとき、食料を持たせる。足りなければ空腹で戦う（true を返す） */
+    takeRations(n) {
+      const need = n * D.RATION_PER_HERO;
+      const s = this.state;
+      if (s.res.food >= need) { s.res.food -= need; this.save(); return false; }
+      s.res.food = 0;
+      this.save();
+      return true;
+    },
+
+    // ---------- 第6版: 曜日のダンジョン ----------
+    dailyToday(now) { return D.DAILY[new Date(now || Date.now()).getDay()]; },
+    dailyTriesLeft(now) { const d = this.state.daily; return d.day === dayKey(now) ? Math.max(0, D.DAILY_TRIES - d.tries) : D.DAILY_TRIES; },
+    dailyTierOpen(t) { return this.state.cleared >= D.DAILY_TIERS[t].req; },
+    /** 曜日のダンジョンに入る。戦闘に渡す設定を返す */
+    dailyStart(tier, now) {
+      const s = this.state;
+      const T = D.DAILY_TIERS[tier];
+      if (!T) return { ok: false, reason: 'bad' };
+      if (!this.dailyTierOpen(tier)) return { ok: false, reason: 'floor', req: T.req };
+      if (this.dailyTriesLeft(now) <= 0) return { ok: false, reason: 'tries' };
+      const def = this.dailyToday(now);
+      const key = dayKey(now);
+      if (s.daily.day !== key) s.daily = { day: key, tries: 0 };
+      s.daily.tries++;
+      const z = D.ZONES[def.zone];
+      let seed = (s.seed * 31 + s.daily.tries * 977 + new Date(now || Date.now()).getDate() * 7) >>> 0;
+      const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+      const size = tier >= 2 ? 4 : tier === 0 ? 2 : 3;
+      const waves = [];
+      for (let w = 0; w < 3; w++) { const wave = []; for (let i = 0; i < size; i++) wave.push(z.pool[Math.floor(rnd() * z.pool.length)]); waves.push(wave); }
+      this.save();
+      return { ok: true, def, tier, opts: { floor: { name: def.name, lv: T.lv, waves, zone: def.zone }, floorIndex: def.zone * D.FLOORS_PER_ZONE + 4,
+        mission: 'hunt', caches: 3, label: `${def.name}（${T.name}）`, seed: seed % 99991 + 1 } };
+    },
+    /** 曜日のダンジョンの報酬（勝てば全部、負けても見つけた箱の分だけ） */
+    dailyReward(def, tier, win, caches) {
+      const T = D.DAILY_TIERS[tier];
+      const k = (win ? 1 : 0) + 0.25 * (caches || 0);
+      const out = {};
+      for (const [r, v] of Object.entries(def.reward)) if (r !== 'exp') out[r] = Math.round(v * T.mult * k);
+      return out;
     },
 
     /** 喧嘩を仲裁しないまま時間がたつと、ひどくなる（殺し合いになることもある） */
@@ -437,27 +597,24 @@
       const next = lv + 1;
       const cost = D.BUILD_COST[next];
       const req = D.BUILD_REQ[next];
-      if (this.state.cleared < req) return { can: false, reason: 'floor', lv, next, cost, req };
-      if (this.state.gold < cost) return { can: false, reason: 'gold', lv, next, cost, req };
-      return { can: true, lv, next, cost, req };
+      const price = Object.assign({ gold: cost }, D.BUILD_RES[next]);
+      const base = { lv, next, cost, req, price };
+      if (def.prod && next > this.fortLv('wall')) return Object.assign({ can: false, reason: 'wall' }, base);
+      if (this.state.cleared < req) return Object.assign({ can: false, reason: 'floor' }, base);
+      const l = this.lack(price);
+      if (l) return Object.assign({ can: false, reason: l }, base);
+      return Object.assign({ can: true }, base);
     },
     build(k) {
       const info = this.buildInfo(k);
       if (!info.can) return Object.assign({ ok: false }, info);
-      this.state.gold -= info.cost;
+      this.pay(info.price);
       this.state.base.buildings[k] = info.next;
       this.save();
       return { ok: true, lv: info.next, cost: info.cost, isNew: info.next === 1 };
     },
     /** 建っている施設（下の階から） */
     floorsBuilt() { return D.BUILDING_ORDER.filter(k => this.buildingLv(k) > 0); },
-    renameBase(name) {
-      const n = String(name || '').trim().slice(0, 30);
-      if (!n) return false;
-      this.state.base.name = n;
-      this.save();
-      return true;
-    },
 
     // ---------- 世界の難易度・滅んだ世界 ----------
     difficulty() { return D.DIFFICULTIES[this.state.difficulty]; },
@@ -476,19 +633,22 @@
     },
 
     /** 戦闘に渡す設定（難易度・命令ゲージ） */
-    battleOptions() { return { enemyMult: this.difficulty().enemy, cmdCost: this.cmdCost(), potions: Object.assign({}, this.state.potions), rels: (a, b) => this.rel(a, b), seed: this.state.seed }; },
+    battleOptions() { return { enemyMult: this.difficulty().enemy, cmdCost: this.cmdCost(), potions: Object.assign({}, this.state.potions), rels: (a, b) => this.rel(a, b), seed: this.state.seed, scout: this.fortLv('tower') }; },
 
     // ---------- 装備（武器倉庫） ----------
     maxForgeTier() { return this.buildingLv('armory'); },
     forgeCost(tier) { return D.EQUIP_TIERS[tier].cost; },
+    forgePrice(tier) { const t = D.EQUIP_TIERS[tier]; return { gold: t.cost, ore: t.ore || 0, mana: t.mana || 0 }; },
     /** 装備を作る。heroId があれば、その英雄にそのまま持たせる */
     forge(kind, tier, heroId) {
       const s = this.state;
       if (!D.EQUIP_KINDS[kind] || !D.EQUIP_TIERS[tier]) return { ok: false, reason: 'bad' };
       if (tier > this.maxForgeTier()) return { ok: false, reason: 'armory' };
       const cost = this.forgeCost(tier);
-      if (s.gold < cost) return { ok: false, reason: 'gold', cost };
-      s.gold -= cost;
+      const price = this.forgePrice(tier);
+      const l = this.lack(price);
+      if (l) return { ok: false, reason: l, cost, price };
+      this.pay(price);
       const item = { uid: s.nextUid++, kind, tier };
       s.items.push(item);
       if (heroId) this.equip(heroId, item.uid);
@@ -527,8 +687,10 @@
       const p = D.POTIONS[key];
       if (!p || !this.canBrew(key)) return { ok: false, reason: 'alchemy' };
       if (this.potionTotal() >= this.potionCap()) return { ok: false, reason: 'cap' };
-      if (s.gold < p.cost) return { ok: false, reason: 'gold', cost: p.cost };
-      s.gold -= p.cost;
+      const price = { gold: p.cost, mana: p.mana || 0 };
+      const l = this.lack(price);
+      if (l) return { ok: false, reason: l, cost: p.cost, price };
+      this.pay(price);
       s.potions[key]++;
       this.save();
       return { ok: true };
@@ -553,7 +715,7 @@
       const kind = kinds[Math.floor(this.rng() * kinds.length)];
       const p = { id: s.nextUid++, heroId, kind, data: {} };
       if (kind === 'train') p.data.cost = 100 + h.lv * 20;
-      if (kind === 'feast') p.data.cost = 300;
+      if (kind === 'feast') p.data.food = 60;
       if (kind === 'tactic') {
         const wish = { brave: ['stance', 'attack'], careful: ['stance', 'defend'], caring: ['healLine', 0.7], loyal: ['stance', 'balance'], whimsical: ['target', 'auto'] }[def.pers];
         p.data = this.tacticUnlocked(wish[0]) ? { key: wish[0], value: wish[1] } : { key: 'stance', value: def.pers === 'brave' ? 'attack' : 'defend' };
@@ -590,8 +752,10 @@
         return { ok: true, accepted: false, trust: -2 };
       }
       const cost = p.data.cost || 0;
-      if (s.gold < cost) return { ok: false, reason: 'gold', cost };
-      s.gold -= cost;
+      const price = { gold: cost, food: p.data.food || 0 };
+      const l = this.lack(price);
+      if (l) return { ok: false, reason: l, cost, price };
+      this.pay(price);
       let detail = '';
       if (p.kind === 'train') { const up = this.gainExp(p.heroId, Math.round(expToNext(h.lv) * 0.6)); detail = up ? `Lv${h.lv} になった` : '経験値を得た'; }
       if (p.kind === 'join') {
@@ -910,13 +1074,25 @@
       for (const [k, n] of Object.entries(extra.potionsUsed || {})) if (s.potions[k] != null) s.potions[k] = Math.max(0, s.potions[k] - n);
       s.stats.battles++;
       const survivors = partyIds.filter(id => !fallenIds.includes(id) && s.heroes[id]);
-      const exp = Math.round(floorExp(fi) * (win ? 1 : 0.3));
+      const daily = extra.daily || null;          // 曜日のダンジョン { def, tier, caches }
+      const dailyLv = daily ? D.DAILY_TIERS[daily.tier].lv : 0;
+      const exp = daily ? Math.round((40 + 9 * dailyLv) * (win ? (daily.def.reward.exp || 1) : 0.3))
+        : Math.round(floorExp(fi) * (win ? 1 : 0.3));
       const rm = this.difficulty().reward;
-      const gold = win ? Math.round(floorGold(fi) * rm) : 0;
+      let gold = win && !daily ? Math.round(floorGold(fi) * rm) : 0;
       let gems = 0;
       let shards = 0;
       let firstClear = false;
-      if (win) {
+      const dailyGot = {};
+      if (daily) {
+        const rw = this.dailyReward(daily.def, daily.tier, win, daily.caches);
+        for (const [k, v] of Object.entries(rw)) {
+          if (k === 'gold') gold += v; else if (k === 'gems') gems += v; else if (k === 'shards') shards += v;
+          else { const g = this.addRes(k, v); if (g > 0) dailyGot[k] = Math.round(g); continue; }
+          dailyGot[k] = v;
+        }
+        if (win) s.stats.wins++;
+      } else if (win) {
         s.stats.wins++;
         if (fi + 1 > s.cleared) {
           s.cleared = fi + 1;
@@ -930,6 +1106,14 @@
       s.gold += gold;
       s.gems += gems;
       s.shards += shards;
+      // 物資（勝つと、その階で集めた木材と石材・鉱石・魔石を持ち帰る）
+      const supplies = daily ? dailyGot : {};
+      if (win && !daily) {
+        const add = (k, n) => { const g = this.addRes(k, Math.round(n * rm)); if (g > 0) supplies[k] = Math.round(g); };
+        add('wood', 8 + fi * 0.5);
+        add('ore', 3 + fi * 0.3);
+        if (isBossFloor(fi) || firstClear) add('mana', 2 + fi * 0.08);
+      }
 
       // 戦闘を通して伸びる（使った能力が伸びる。才能がないと少しだけ）
       const growth = {};
@@ -985,7 +1169,7 @@
       // 区域のボスを初めて倒した: その地方の出身の英雄は信頼度が上がる。100階で世界を救う
       let freedZone = null;
       let worldSaved = false;
-      if (win && firstClear && isBossFloor(fi)) {
+      if (win && firstClear && isBossFloor(fi) && !daily) {
         const z = D.zoneOfFloor(fi);
         const natives = z.land ? Object.keys(s.heroes).filter(id => D.heroById[id].land === z.land) : [];
         for (const id of natives) change(id, 10);
@@ -1015,12 +1199,12 @@
       const proposal = this.maybePropose();
       this.save();
       return { win, reason: reason || null, exp, gold, gems, shards, firstClear, levelUps, fallen, trust, newcomer, freedZone, worldSaved, mvp,
-        trainExp: trained.length ? trainExp : 0, trained, proposal, growth };
+        trainExp: trained.length ? trainExp : 0, trained, proposal, growth, supplies };
     },
   };
 
   const api = {
-    Game, expToNext, floorExp, floorGold, firstClearGems, firstClearShards, repeatShards, traitSlots,
+    Game, expToNext, floorExp, floorGold, firstClearGems, firstClearShards, repeatShards, traitSlots, dayKey, costText,
     newState, newOwned, sanitize, SAVE_KEY, rollDifficulty, isBossFloor, relKey, registerDef,
   };
   if (isNode) module.exports = api;

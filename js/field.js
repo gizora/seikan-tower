@@ -30,7 +30,7 @@
   let lastExplored = 0;
   let fxList = [];
   let numbers = [];
-  let npcObj = null, relicObjs = [], exitObj = null, exitFx = null, campObjs = [];
+  let npcObj = null, relicObjs = [], exitObj = null, exitFx = null, campObjs = [], clueObjs = [];
   let t = 0, targeting = false, picked = null, followAll = true;
   let movePreview = null;
 
@@ -46,7 +46,7 @@
     const keep = new Set([world.sun, world.sun.target, world.hemi]);
     for (const o of world.scene.children.slice()) if (!keep.has(o)) world.scene.remove(o);
     units = {};
-    npcObj = null; relicObjs = []; exitObj = null; exitFx = null; campObjs = [];
+    npcObj = null; relicObjs = []; exitObj = null; exitFx = null; campObjs = []; clueObjs = [];
   }
 
   // ---------- 地形 ----------
@@ -156,7 +156,41 @@
       npcObj = { obj: mesh, billboard: true };
     }
     npcObj.icon = W3.iconSprite('?', '#8ad8ff', 0.7);
-    world.scene.add(npcObj.obj); world.scene.add(npcObj.icon);
+    if (!ex.npc.hidden) { world.scene.add(npcObj.obj); world.scene.add(npcObj.icon); }
+    // 手掛かり（足跡・書き置き・亡骸・壁画）。NPC と石碑は上で描いている
+    for (const c of ex.clues) {
+      if (c.npc) { clueObjs.push({ c, obj: null, icon: null }); continue; }
+      const g = new THREE.Group();
+      if (c.kind === 'tracks') {
+        const m = new THREE.MeshBasicMaterial({ color: 0x1a1410, transparent: true, opacity: 0.55 });
+        for (let i = 0; i < 6; i++) { const p = new THREE.Mesh(new THREE.CircleGeometry(0.11, 6), m); p.rotation.x = -Math.PI / 2; p.position.set(-0.7 + i * 0.28, 0.03, (i % 2 ? 0.12 : -0.12) + Math.sin(i) * 0.1); p.scale.set(1, 1.6, 1); g.add(p); }
+      } else if (c.kind === 'note') {
+        const paper = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.32), new THREE.MeshLambertMaterial({ color: 0xe8dcc0, side: THREE.DoubleSide }));
+        paper.rotation.x = -Math.PI / 2; paper.rotation.z = 0.4; paper.position.y = 0.04; g.add(paper);
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.12, 0), new THREE.MeshLambertMaterial({ color: 0x6a6a6a })); rock.position.set(0.1, 0.1, 0.05); g.add(rock);
+      } else if (c.kind === 'corpse') {
+        const bone = new THREE.MeshLambertMaterial({ color: 0xd8d0c0 });
+        const skull = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), bone); skull.position.set(-0.35, 0.14, 0); g.add(skull);
+        for (let i = 0; i < 4; i++) { const r = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 0.4), bone); r.position.set(-0.05 + i * 0.13, 0.05, 0); g.add(r); }
+        const sword = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.9, 0.06), new THREE.MeshLambertMaterial({ color: 0x9aa2b4 })); sword.position.set(0.5, 0.42, 0.2); sword.rotation.z = 0.25; sword.castShadow = true; g.add(sword);
+      } else if (c.kind === 'mural') {
+        const slab = new THREE.Mesh(W3.boxGeo(1.4, 1.1, 0.22, 2), W3.mat(W3.TEX.stone())); slab.position.y = 0.55; slab.castShadow = true; g.add(slab);
+        const art = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.75), new THREE.MeshBasicMaterial({ color: 0xc89a5a })); art.position.set(0, 0.58, 0.12); g.add(art);
+      }
+      g.position.copy(toWorld(c.x, c.y, map));
+      const icon = W3.iconSprite('?', '#8ad8ff', 0.55);
+      world.scene.add(g); world.scene.add(icon);
+      clueObjs.push({ c, obj: g, icon });
+    }
+    // 物資の箱（曜日のダンジョン）
+    for (const r of ex.caches) {
+      const g = new THREE.Group();
+      const crate = new THREE.Mesh(W3.boxGeo(0.7, 0.55, 0.55, 1), W3.mat(W3.TEX.wood())); crate.position.y = 0.28; crate.castShadow = true; g.add(crate);
+      const band = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.08, 0.57), new THREE.MeshLambertMaterial({ color: 0xd4a640, emissive: 0x3a2a00 })); band.position.y = 0.4; g.add(band);
+      g.position.copy(toWorld(r.x, r.y, map));
+      world.scene.add(g);
+      relicObjs.push({ mesh: g, r, cache: true });
+    }
     // 遺物
     for (const r of ex.relics) {
       const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.35), new THREE.MeshBasicMaterial({ color: 0xffe27a }));
@@ -285,7 +319,8 @@
       }
       case 'spawn': for (const id of e.ids || []) { const u = ex.unitById(id); if (u && !units[id]) makeUnit(u); fxAtUnit('spawn/spawn-portal', id, 0.2, 1 / 28); } break;
       case 'relic': { const p = toWorld(e.x, e.y, ex.map); addFx('pickups/collect-burst', p.x, 0.8, p.z, 1 / 24); break; }
-      case 'mission': if (npcObj) addFx('ui/exclamation', npcObj.obj.position.x, 2.6, npcObj.obj.position.z, 1 / 26); break;
+      case 'mission': { if (npcObj && !ex.npc.hidden && ex.npc.met) addFx('ui/exclamation', npcObj.obj.position.x, 2.6, npcObj.obj.position.z, 1 / 26); break; }
+      case 'clue': { const p = toWorld(e.x, e.y, ex.map); addFx('ui/exclamation', p.x, 1.8, p.z, 1 / 28); addFx('pickups/collect-burst', p.x, 0.5, p.z, 1 / 26); break; }
       case 'potion': fxAtUnit('nature/healing-bloom', e.id, 0.4, 1 / 30); break;
       case 'note': if (e.kind === 'slack' && e.unit) fxAtUnit('status/sleep', e.unit, 2.1, 1 / 32); break;
       default: break;
@@ -366,13 +401,25 @@
       npcObj.obj.position.set(p.x, 0, p.z);
       if (npcObj.billboard) { npcObj.obj.rotation.y = az; W3.setBillboardCanvas(npcObj.obj, S.lookCanvas('npc', NPC_LOOK, n.following && ex.aliveHeroes()[0] && Math.hypot(n.x - ex.aliveHeroes()[0].x, n.y - ex.aliveHeroes()[0].y) > 1.5 ? 'walk' + (Math.floor(t * 8) % 4) : 'idle0'), false); }
       const seen = ex.explored[Math.round(n.y) * ex.map.w + Math.round(n.x)] === 1;
-      npcObj.obj.visible = seen;
-      npcObj.icon.visible = seen && !n.met;
+      npcObj.obj.visible = seen && !n.hidden;
+      npcObj.icon.visible = seen && !n.met && !n.hidden;
       npcObj.icon.position.set(p.x, 2.5 + Math.sin(t * 3) * 0.08, p.z);
     }
     for (const r of relicObjs) {
       r.mesh.visible = !r.r.taken && ex.explored[Math.round(r.r.y) * ex.map.w + Math.round(r.r.x)] === 1;
+      if (r.cache) continue;
       r.mesh.rotation.y += dt * 2; r.mesh.position.y = 0.7 + Math.sin(t * 2) * 0.1;
+    }
+    for (const o of clueObjs) {
+      const c = o.c;
+      const seen = c.seen || ex.explored[c.y * ex.map.w + c.x] === 1;
+      if (o.obj) o.obj.visible = seen;
+      if (o.icon) {
+        o.icon.visible = seen && !c.found;
+        const p = toWorld(c.x, c.y, ex.map);
+        o.icon.position.set(p.x, 1.5 + Math.sin(t * 3 + c.id) * 0.08, p.z);
+      }
+      if (c.npc && npcObj) npcObj.icon.visible = npcObj.icon.visible && !c.found;
     }
     if (exitObj) {
       const m = ex.mission;
@@ -431,7 +478,7 @@
       opts = options || {};
       if (world && container === el) return;
       container = el;
-      world = W3.createWorld(el, { dist: 20, az: 0.5, pol: 0.86, fov: 34, minDist: 9, maxDist: 40, bounds: 30, shadowSize: 18, bloom: 0.5, onTap });
+      world = W3.createWorld(el, { dist: 14, az: 0.5, pol: 0.9, fov: 34, minDist: 7, maxDist: 40, bounds: 30, shadowSize: 16, bloom: 0.5, onTap });
       layer = document.createElement('div');
       layer.className = 'num-layer';
       el.appendChild(layer);
@@ -447,6 +494,7 @@
       for (const u of ex.heroes.concat(ex.enemies)) makeUnit(u);
       world.cam.target.copy(center());
       world.cam.follow = () => center();
+      world.cam.dist = 14;
       world.resize();
     },
     /** 戦いの出来事を演出に変える */

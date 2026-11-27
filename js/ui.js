@@ -17,7 +17,22 @@
   const pct = (v) => Math.round(v * 1000) / 10;
   const traitText = (t) => { const d = D.TRAITS[t.id], v = d.vals[t.lv - 1]; return d.desc.replace('{p}', Math.round(v * 100)).replace('{v}', v); };
   const traitChip = (t) => `<span class="trait" title="${esc(traitText(t))}">${esc(D.TRAITS[t.id].name)}<b>${['Ⅰ', 'Ⅱ', 'Ⅲ'][t.lv - 1]}</b></span>`;
-  const ACT_NAME = { train: '訓練中', social: '広場で過ごしている', rest: '休んでいる', wander: '歩き回っている' };
+  const ACT_NAME = { train: '訓練中', social: '広場で過ごしている', rest: '休んでいる', wander: '歩き回っている', work: '働いている' };
+  const actName = (o) => o.activity === 'work' && o.work && D.BUILDINGS[o.work] ? `${D.BUILDINGS[o.work].name}で働いている` : (ACT_NAME[o.activity] || '');
+  const LACK = { gold: '金貨', food: '食料', wood: '木材と石材', ore: '鉱石', mana: '魔石' };
+  const lackText = (r) => LACK[r] ? `${LACK[r]}が足りません` : r === 'floor' ? 'まだ解放されていません' : r === 'wall' ? '城壁のレベルを上げてください' : r === 'max' ? '最大です' : 'できません';
+  const resNum = (k) => Math.floor(S().res[k] || 0);
+  /** 報酬の表（gold / gems / shards / 物資）を短い文にする */
+  function rewardText(rw) {
+    const out = [];
+    if (rw.gold) out.push('🪙' + num(rw.gold));
+    if (rw.gems) out.push('💎' + num(rw.gems));
+    if (rw.shards) out.push('✦' + num(rw.shards));
+    for (const k of D.RES_KEYS) if (rw[k]) out.push(D.RESOURCES[k].icon + num(rw[k]));
+    return out.join(' ');
+  }
+  /** 費用ボタンの小さい文字（金貨と物資） */
+  const priceText = (p) => Game.costText(p) || '無料';
 
   let toastTimer = null;
   function toast(msg) {
@@ -36,6 +51,11 @@
       lastWallet[k] = S()[k];
     }
     $('#world-name').textContent = S().base.name;
+    const cap = Game.resCap();
+    $('#res-bar').innerHTML = D.RES_KEYS.map(k => {
+      const v = resNum(k);
+      return `<span class="res ${v >= cap ? 'full' : ''} ${k === 'food' && S().hungry ? 'empty' : ''}" title="${D.RESOURCES[k].name}"><span aria-hidden="true">${D.RESOURCES[k].icon}</span><span class="sr-only">${D.RESOURCES[k].name}</span><b>${num(v)}</b><i style="--p:${Math.min(1, v / cap)}"></i></span>`;
+    }).join('');
   }
 
   // ---------- モーダル（パネル） ----------
@@ -80,11 +100,12 @@
   }
   function mountRoom() {
     Room.mount($('#scene'), {
-      getHeroes: () => Object.keys(S().heroes).map(id => ({ id, activity: S().heroes[id].activity, injured: S().heroes[id].injured > 0, proposal: S().proposals.some(p => p.heroId === id), quarrel: quarrelOf(id) })),
+      getFort: () => S().fort,
+      getHeroes: () => Object.keys(S().heroes).map(id => ({ id, activity: S().heroes[id].activity, work: S().heroes[id].work, injured: S().heroes[id].injured > 0, proposal: S().proposals.some(p => p.heroId === id), quarrel: quarrelOf(id) })),
       getBuildings: () => D.BUILDING_ORDER.map(key => ({ key, lv: Game.buildingLv(key) })),
       fallenCount: () => S().fallen.length,
       onHero: (id) => heroDetail(id),
-      onBuilding: (key) => buildingModal(key),
+      onBuilding: (key) => (key === 'fort' ? fortModal() : buildingModal(key)),
       onMemorial: () => memorialModal(),
     });
   }
@@ -95,6 +116,8 @@
     if (s.proposals.length) list.push(`<button type="button" class="notice prop" data-action="building" data-key="plaza"><span class="badge">${s.proposals.length}</span><span>提案があります</span></button>`);
     const inj = Object.keys(s.heroes).filter(id => s.heroes[id].injured > 0);
     if (inj.length) list.push(`<span class="notice inj"><span>けが ${inj.map(nameOf).map(esc).join('・')}</span></span>`);
+    if (s.hungry) list.push('<button type="button" class="notice hunger" data-action="building" data-key="farm"><span>🍞 食料が尽きた。英雄たちが空腹になっている</span></button>');
+    else if (D.RES_KEYS.some(k => resNum(k) >= Game.resCap())) list.push('<button type="button" class="notice full" data-action="fort"><span>📦 物資がいっぱい。城壁を広げるとたくさんためられる</span></button>');
     $('#notices').innerHTML = list.join('');
   }
   function refreshHome() { renderWallet(); renderNotices(); Room.refresh(); }
@@ -130,6 +153,7 @@
       case 'fusion': return `費用 ×${D.FUSION_COST[lv]}`;
       case 'armory': return `${D.EQUIP_TIERS[lv].name}まで`;
       case 'alchemy': return `薬 ${D.POTION_CAP[lv]}個`;
+      case 'farm': case 'lumber': case 'mine': return Object.entries(D.PRODUCTION[key]).map(([r, p]) => `${D.RESOURCES[r].icon}+${Math.round(p.base * lv * 60)}/時`).join(' ');
       default: return '';
     }
   }
@@ -138,23 +162,25 @@
     const info = Game.buildInfo(key);
     if (info.reason === 'max') return '<p class="muted center">レベル最大</p>';
     return `<div class="upgrade"><span>${esc(buildingEffect(key, lv))} → <b>${esc(buildingEffect(key, info.next))}</b></span>
-      <button type="button" class="btn btn-small ${info.can ? 'btn-gold' : ''}" data-action="build" data-key="${key}" ${info.can ? '' : 'disabled'}>${lv ? 'Lv' + info.next : '建てる'}<small>${info.reason === 'floor' ? info.req + '階クリア' : '🪙' + num(info.cost)}</small></button></div>`;
+      <button type="button" class="btn btn-small ${info.can ? 'btn-gold' : ''}" data-action="build" data-key="${key}" ${info.can ? '' : 'disabled'}>${lv ? 'Lv' + info.next : '建てる'}<small>${info.reason === 'floor' ? info.req + '階クリア' : info.reason === 'wall' ? '城壁Lv' + info.next + 'が必要' : esc(priceText(info.price))}</small></button></div>`;
   }
 
   function buildingModal(key, note) {
     const def = D.BUILDINGS[key];
     const lv = Game.buildingLv(key);
     let body = '';
-    if (key === 'gate') body = `<div class="big-actions"><button type="button" class="btn btn-gold big" data-action="tower">🗼 塔へ</button><button type="button" class="btn big" data-action="gacha">🔮 召喚</button></div>`;
+    if (key === 'gate') { const dd = Game.dailyToday(); body = `<div class="big-actions"><button type="button" class="btn btn-gold big" data-action="tower">🗼 塔へ<small>${S().cleared} / ${D.FLOORS.length}階</small></button></div>
+      <div class="big-actions"><button type="button" class="btn big" data-action="daily">${dd.icon} 曜日のダンジョン<small>${D.DAY_NAMES[new Date().getDay()]}曜日・${esc(dd.name)}・あと${Game.dailyTriesLeft()}回</small></button><button type="button" class="btn big" data-action="gacha">🔮 召喚</button></div>`; }
+    else if (D.BUILDINGS[key].prod) body = prodHTML(key);
     else if (key === 'dorm') body = heroListHTML();
     else if (key === 'strategy') body = lv ? `<div class="big-actions"><button type="button" class="btn btn-gold big" data-action="party">📜 編成と作戦</button></div>` : `<div class="big-actions"><button type="button" class="btn big" data-action="party">📜 編成</button></div><p class="muted center">建てると細かい作戦が使える</p>`;
     else if (key === 'plaza') body = plazaHTML();
     else if (key === 'training') body = trainingHTML();
     else if (key === 'armory' && lv) body = `<h3>装備を作る</h3><div class="forge">${Object.keys(D.EQUIP_KINDS).map(kind => `<div class="frow"><span>${D.EQUIP_KINDS[kind].icon}</span>${[1, 2, 3, 4, 5].filter(tier => tier <= lv).map(tier =>
-      `<button type="button" class="btn btn-small" data-action="forge" data-kind="${kind}" data-tier="${tier}" ${S().gold < D.EQUIP_TIERS[tier].cost ? 'disabled' : ''}>${D.EQUIP_TIERS[tier].name}<small>🪙${num(D.EQUIP_TIERS[tier].cost)}</small></button>`).join('')}</div>`).join('')}</div>
+      `<button type="button" class="btn btn-small" data-action="forge" data-kind="${kind}" data-tier="${tier}" ${Game.lack(Game.forgePrice(tier)) ? 'disabled' : ''}>${D.EQUIP_TIERS[tier].name}<small>${priceText(Game.forgePrice(tier))}</small></button>`).join('')}</div>`).join('')}</div>
       <p class="muted">倉庫: ${S().items.length ? S().items.map(it => D.EQUIP_KINDS[it.kind].icon + D.EQUIP_TIERS[it.tier].name).join('・') : 'なし'}</p>`;
     else if (key === 'alchemy' && lv) body = `<h3>薬を作る <span class="muted">${Game.potionTotal()} / ${Game.potionCap()}</span></h3><div class="forge"><div class="frow">${Object.entries(D.POTIONS).map(([k, p]) =>
-      `<button type="button" class="btn btn-small" data-action="brew" data-key="${k}" ${!Game.canBrew(k) || S().gold < p.cost || Game.potionTotal() >= Game.potionCap() ? 'disabled' : ''} title="${esc(p.desc)}">${p.icon}${esc(p.name)} ${S().potions[k]}<small>${Game.canBrew(k) ? '🪙' + p.cost : 'Lv' + p.lv}</small></button>`).join('')}</div></div><p class="muted">戦闘で英雄が自分で使う</p>`;
+      `<button type="button" class="btn btn-small" data-action="brew" data-key="${k}" ${!Game.canBrew(k) || Game.lack({ gold: p.cost, mana: p.mana }) || Game.potionTotal() >= Game.potionCap() ? 'disabled' : ''} title="${esc(p.desc)}">${p.icon}${esc(p.name)} ${S().potions[k]}<small>${Game.canBrew(k) ? priceText({ gold: p.cost, mana: p.mana }) : 'Lv' + p.lv}</small></button>`).join('')}</div></div><p class="muted">戦闘で英雄が自分で使う</p>`;
     else if (key === 'fusion' && lv) body = `<p class="muted">英雄の「送り出す」で特性を受け継がせる</p>`;
     openModal(`
       <h2 id="modal-title">${def.icon} ${esc(def.name)} <span class="muted">${lv ? 'Lv' + lv : '未建設'}</span></h2>
@@ -164,9 +190,53 @@
       ${close}`);
   }
 
+  // ---------- 第6版: 物資の施設・陣地・物資の一覧 ----------
+  function prodHTML(key) {
+    const lv = Game.buildingLv(key);
+    const per = D.PRODUCTION[key];
+    if (!lv) return `<p class="muted">建てると${Object.keys(per).map(r => D.RESOURCES[r].name).join('と')}を作れる</p>`;
+    const workers = Game.workersAt(key);
+    const cap = Game.resCap();
+    const rows = Object.entries(per).map(([r, p]) => `<div class="prod-row"><span class="pi">${D.RESOURCES[r].icon}</span><span>${D.RESOURCES[r].name}<b>${num(resNum(r))}</b><small>/ ${num(cap)}</small></span>
+      <i class="meter"><b style="width:${Math.min(100, resNum(r) / cap * 100)}%"></b></i><em>+${Math.round((p.base * lv + p.worker * workers.length) * 60)}/時</em></div>`).join('');
+    return `<div class="prod">${rows}</div>
+      <p class="muted">働いている英雄 ${workers.length ? workers.map(id => faceHTML(id)).join('') : 'なし'}</p>
+      <p class="muted">英雄は自分の考えで手伝いに来る。人が多いほどたくさん作れる。施設は城壁のレベルまで上げられる（城壁 Lv${Game.fortLv('wall')}）</p>
+      <div class="modal-actions"><button type="button" class="btn btn-small" data-action="fort">🏰 陣地を広げる</button><button type="button" class="btn btn-small" data-action="supplies">📦 物資の一覧</button></div>`;
+  }
+  function fortEffect(k, lv) {
+    if (k === 'wall') return `物資 ${num(D.RES_CAP[lv])}まで・施設 Lv${lv}まで`;
+    if (!lv) return 'なし';
+    return `偵察 +${lv * 1.5}マス${lv >= 3 ? '・手掛かり' : ''}${lv >= 5 ? '・巣' : ''}`;
+  }
+  function fortModal(note) {
+    const row = (k) => {
+      const def = D.FORT[k], lv = Game.fortLv(k), info = Game.fortInfo(k);
+      const btn = info.reason === 'max' ? '<p class="muted center">レベル最大</p>' : `<div class="upgrade"><span>${esc(fortEffect(k, lv))} → <b>${esc(fortEffect(k, info.next))}</b></span>
+        <button type="button" class="btn btn-small ${info.can ? 'btn-gold' : ''}" data-action="fort-build" data-key="${k}" ${info.can ? '' : 'disabled'}>Lv${info.next}<small>${info.reason === 'floor' ? info.req + '階クリア' : esc(priceText(info.cost))}</small></button></div>`;
+      return `<section class="fort-row"><h3>${def.icon} ${def.name} <span class="muted">Lv${lv}</span></h3><p class="muted">${esc(def.desc)}</p>${btn}</section>`;
+    };
+    openModal(`<h2 id="modal-title">🏰 陣地</h2>
+      ${note ? `<p class="note">${esc(note)}</p>` : ''}
+      <p class="muted">城壁を広げると、外側に畑・石切り場・鉱山を大きくできる。見張り塔は塔の中の偵察に役立つ。</p>
+      ${row('wall')}${row('tower')}${close}`);
+  }
+  function suppliesModal() {
+    const cap = Game.resCap();
+    const ph = Game.productionPerHour();
+    const rows = D.RES_KEYS.map(k => `<div class="prod-row"><span class="pi">${D.RESOURCES[k].icon}</span><span>${D.RESOURCES[k].name}<b>${num(resNum(k))}</b><small>/ ${num(cap)}</small></span>
+      <i class="meter"><b style="width:${Math.min(100, resNum(k) / cap * 100)}%"></b></i><em class="${ph[k] < 0 ? 'neg' : ''}">${ph[k] >= 0 ? '+' : ''}${Math.round(ph[k])}/時</em></div>`).join('');
+    openModal(`<h2 id="modal-title">📦 物資</h2>
+      ${S().hungry ? '<p class="note">食料が尽きている。英雄は空腹で、訓練しても伸びず、信頼度が下がっていく</p>' : ''}
+      <div class="prod">${rows}</div>
+      <p class="muted">食料は英雄が食べ、塔へ持っていく（1人 🍞${D.RATION_PER_HERO}）。木材と石材は建物と陣地に、鉱石は装備に、魔石は薬と強い装備に使う。曜日のダンジョンでもたくさん手に入る。</p>
+      <div class="big-actions">${D.PROD_BUILDINGS.map(k => `<button type="button" class="btn" data-action="building" data-key="${k}">${D.BUILDINGS[k].icon} ${D.BUILDINGS[k].name}<small>${Game.buildingLv(k) ? 'Lv' + Game.buildingLv(k) : '未建設'}</small></button>`).join('')}</div>
+      <div class="modal-actions"><button type="button" class="btn" data-action="fort">🏰 陣地</button></div>${close}`);
+  }
+
   function doBuild(key) {
     const r = Game.build(key);
-    if (!r.ok) { toast(r.reason === 'gold' ? '金貨が足りません' : r.reason === 'floor' ? `${r.req}階クリアで解放` : '最大です'); return; }
+    if (!r.ok) { toast(r.reason === 'floor' ? `${r.req}階クリアで解放` : lackText(r.reason)); return; }
     renderWallet();
     Room.refresh();
     modalOnClose = null;
@@ -175,8 +245,9 @@
 
   function plazaHTML() {
     const s = S();
-    const props = s.proposals.map(p => `<li>${faceHTML(p.heroId)}<span class="pt">${esc(Game.proposalText(p))}${p.data.cost ? ` <small>🪙${num(p.data.cost)}</small>` : ''}</span>
-      <button type="button" class="btn btn-small btn-gold" data-action="prop-yes" data-pid="${p.id}" ${s.gold < (p.data.cost || 0) ? 'disabled' : ''}>受ける</button>
+    const pp = (p) => ({ gold: p.data.cost || 0, food: p.data.food || 0 });
+    const props = s.proposals.map(p => `<li>${faceHTML(p.heroId)}<span class="pt">${esc(Game.proposalText(p))}${p.data.cost || p.data.food ? ` <small>${Game.costText(pp(p))}</small>` : ''}</span>
+      <button type="button" class="btn btn-small btn-gold" data-action="prop-yes" data-pid="${p.id}" ${Game.lack(pp(p)) ? 'disabled' : ''}>受ける</button>
       <button type="button" class="btn btn-small" data-action="prop-no" data-pid="${p.id}">断る</button></li>`).join('');
     const quarrels = s.quarrels.map(q => `<li><button type="button" class="btn btn-small" data-action="quarrel" data-qid="${q.id}">${esc(nameOf(q.a))}と${esc(nameOf(q.b))}の喧嘩を仲裁する</button></li>`).join('');
     const bad = Game.badPairs().slice(0, 5).map(b => `<li>${faceHTML(b.a)}${faceHTML(b.b)}<span>${esc(nameOf(b.a))}・${esc(nameOf(b.b))}</span><b class="rel-bad">仲 ${b.rel}</b></li>`).join('');
@@ -191,7 +262,7 @@
     const ids = Game.ownedList();
     const rows = ids.map(id => {
       const h = Game.owned(id), tal = Game.talents(id);
-      return `<li class="${h.activity === 'train' ? 'on' : ''}">${faceHTML(id)}<span class="tn">${esc(nameOf(id))}<small>${h.activity === 'train' ? '訓練中' : esc(ACT_NAME[h.activity] || '')}</small></span>
+      return `<li class="${h.activity === 'train' ? 'on' : ''}">${faceHTML(id)}<span class="tn">${esc(nameOf(id))}<small>${h.activity === 'train' ? '訓練中' : esc(actName(h))}</small></span>
         ${D.STAT_KEYS.map(k => `<span class="tal t${tal[k]}" title="${D.STAT_NAMES[k]}: 才能 ${D.TALENT_NAMES[tal[k]]}・+${pct(h.bonus[k] || 0)}%（上限 ${pct(Game.bonusCap(id, k))}%）">${D.STAT_NAMES[k].slice(0, 1)}<b>${D.TALENT_NAMES[tal[k]]}</b><i>+${pct(h.bonus[k] || 0)}</i></span>`).join('')}</li>`;
     }).join('');
     return `<p class="muted">英雄は自分で訓練する。才能のない能力（—）は伸びない</p><ul class="train-list">${rows}</ul>`;
@@ -204,29 +275,40 @@
       <ul class="memorial">${list.map(f => `<li>${SP.faceImg(f.id, 'mono')}<span><b>${esc(f.name)}</b> ★${f.star} Lv${f.lv}<br><small>${cause(f)}</small></span></li>`).join('')}</ul>${close}`);
   }
 
-  // ---------- 塔（次元の門から） ----------
-  let towerZone = null;
+  // ---------- 塔（次元の門から）: 1階から積み上がっていく塔 ----------
+  let towerSeen = null;          // 前に塔を見たときのクリア階数（新しく積み上がった階を光らせる）
   function towerModal() {
     const s = S();
-    const curZone = Math.min(9, Math.floor(s.cleared / D.FLOORS_PER_ZONE));
-    if (towerZone === null || towerZone > curZone) towerZone = curZone;
-    const z = D.ZONES[towerZone];
-    const chips = D.ZONES.map((zz, i) => {
-      const open = i <= curZone, done = Game.zoneCleared(i);
-      return `<button type="button" class="zchip ${i === towerZone ? 'on' : ''} ${done ? 'done' : ''}" data-action="zone" data-z="${i}" ${open ? '' : 'disabled'} aria-pressed="${i === towerZone}">${i * 10 + 1}<small>${done ? '✓' : open ? '' : '🔒'}</small></button>`;
-    }).join('');
-    const floors = [];
-    for (let k = 0; k < D.FLOORS_PER_ZONE; k++) {
-      const i = towerZone * D.FLOORS_PER_ZONE + k;
+    const N = D.FLOORS.length;
+    const fresh = towerSeen != null && s.cleared > towerSeen ? [towerSeen, s.cleared] : null;
+    towerSeen = s.cleared;
+    let rows = '';
+    for (let i = N - 1; i >= 0; i--) {
+      const zi = Math.floor(i / D.FLOORS_PER_ZONE);
       const cleared = i < s.cleared, current = i === s.cleared, locked = i > s.cleared;
-      floors.push(`<button type="button" class="fl ${cleared ? 'cleared' : ''} ${current ? 'current' : ''} ${isBossFloor(i) ? 'boss' : ''}" data-action="floor" data-floor="${i}" ${locked ? 'disabled' : ''} aria-label="${i + 1}階">${i + 1}${isBossFloor(i) ? '<small>👑</small>' : cleared ? '<small>✓</small>' : ''}</button>`);
+      const w = Math.round(100 - (i / (N - 1)) * 38);
+      if ((i + 1) % D.FLOORS_PER_ZONE === 0) rows += `<div class="tz ${Game.zoneCleared(zi) ? 'done' : ''} ${locked && !current ? 'fog' : ''}" style="--w:${w}%"><span>${zi * 10 + 1}–${zi * 10 + 10}階</span><b>${esc(D.ZONES[zi].name)}</b>${Game.zoneCleared(zi) ? '<em>取り戻した</em>' : ''}</div>`;
+      const just = fresh && i >= fresh[0] && i < fresh[1];
+      rows += `<button type="button" class="tf ${cleared ? 'cleared' : ''} ${current ? 'current' : ''} ${locked ? 'locked' : ''} ${isBossFloor(i) ? 'boss' : ''} ${just ? 'just' : ''}" style="--w:${w}%;--d:${just ? (i - fresh[0]) * 0.12 : 0}s" data-action="floor" data-floor="${i}" ${locked ? 'disabled' : ''} aria-label="${i + 1}階${cleared ? ' クリア済み' : current ? ' 次の階' : ''}">
+        <span class="tn">${i + 1}</span><span class="tw" aria-hidden="true"></span>${isBossFloor(i) ? '<span class="tb" aria-hidden="true">👑</span>' : ''}${current ? '<em>NEXT</em>' : ''}</button>`;
     }
     openModal(`
-      <h2 id="modal-title">🗼 塔 <span class="muted">${s.cleared} / ${D.FLOORS.length}</span></h2>
-      <div class="progress" aria-hidden="true"><i style="width:${s.cleared}%"></i></div>
-      <p class="muted">${esc(z.name)}</p>
-      <div class="zchips" role="group" aria-label="区域">${chips}</div>
-      <div class="floors">${floors.reverse().join('')}</div>${close}`, { back: () => buildingModal('gate') });
+      <h2 id="modal-title">🗼 塔 <span class="muted">${s.cleared} / ${N}階</span></h2>
+      <div class="tower-wrap">
+        <div class="tower-meter" aria-hidden="true"><i style="height:${s.cleared / N * 100}%"></i><span style="bottom:${s.cleared / N * 100}%">${s.cleared}</span></div>
+        <div class="tower-stack" id="tower-stack">
+          <div class="tspire ${s.worldSaved ? 'lit' : ''}" aria-hidden="true"><i></i></div>
+          ${rows}
+          <div class="tbase"><span>⛩ 待機室「${esc(s.base.name)}」</span></div>
+        </div>
+      </div>${close}`, { back: () => buildingModal('gate'), focus: '.tf.current, .tf.cleared' });
+    const stack = $('#tower-stack');
+    const cur = $('.tf.current', stack) || $('.tf.cleared', stack);
+    if (stack && cur) {
+      const target = Math.max(0, cur.offsetTop - stack.clientHeight * 0.55);
+      stack.scrollTop = fresh ? target + 160 : target;
+      if (fresh) requestAnimationFrame(() => stack.scrollTo({ top: target, behavior: 'smooth' }));
+    }
   }
   function floorInfo(i) {
     const f = D.FLOORS[i];
@@ -239,16 +321,46 @@
     const injured = S().party.filter(id => id && Game.isInjured(id));
     openModal(`
       <h2 id="modal-title">${i + 1}階 <span class="muted">${esc(f.name)}</span></h2>
-      <p class="muted">任務: ？？？（中で調べるとわかる）</p>
+      <p class="muted">任務: ？？？（中で手掛かりを調べるとわかる）</p>
       <div class="enemy-row">${enemies.map(k => `<span class="enemy-chip">${SP.enemyImg(k)}<small>${esc(D.ENEMIES[k].name)}</small></span>`).join('')}</div>
       ${bossKey ? `<p class="note">👑 ${esc(D.ENEMIES[bossKey].trait)}</p>` : ''}
       <p class="rewards">Lv${f.lv}　🪙${num(Math.round(floorGold(i) * rm))}　✦${Math.round((first ? firstClearShards(i) : repeatShards(i)) * rm)}${first ? `　💎${Math.round(firstClearGems(i) * rm / 10) * 10}` : ''}</p>
-      <div class="party-faces">${S().party.map(id => faceHTML(id, id && Game.isInjured(id) ? 'inj' : '')).join('')}<span class="power">${num(Game.partyPower())}</span></div>
-      ${injured.length ? `<p class="muted">けがをしている ${injured.map(nameOf).map(esc).join('・')} は行けない</p>` : ''}
+      ${partyBoxHTML()}
       <div class="modal-actions">
         <button type="button" class="btn" data-action="party">編成</button>
         <button type="button" class="btn btn-gold" data-action="start" data-floor="${i}" ${ids.length ? '' : 'disabled'}>挑戦</button>
       </div>`, { back: towerModal, focus: ids.length ? '[data-action="start"]' : '[data-action="party"]' });
+  }
+  /** 出かける編成と、持っていく食料 */
+  function partyBoxHTML() {
+    const ids = Game.partyIds();
+    const injured = S().party.filter(id => id && Game.isInjured(id));
+    const need = ids.length * D.RATION_PER_HERO;
+    return `<div class="party-faces">${S().party.map(id => faceHTML(id, id && Game.isInjured(id) ? 'inj' : '')).join('')}<span class="power">⚔ ${num(Game.partyPower())}</span></div>
+      <p class="muted">持っていく食料 🍞${need}${resNum('food') < need ? '　<span class="rel-bad">足りない（空腹で戦う・能力 -15%）</span>' : ''}${Game.fortLv('tower') ? `・見張り塔の偵察 Lv${Game.fortLv('tower')}` : ''}</p>
+      ${injured.length ? `<p class="muted">けがをしている ${injured.map(nameOf).map(esc).join('・')} は行けない</p>` : ''}`;
+  }
+  // ---------- 第6版: 曜日のダンジョン ----------
+  function dailyModal() {
+    const def = Game.dailyToday();
+    const left = Game.dailyTriesLeft();
+    const today = new Date().getDay();
+    const ids = Game.partyIds();
+    const week = D.DAILY.map(d => `<span class="wd ${d.day === today ? 'on' : ''}" title="${esc(d.name)}"><b>${D.DAY_NAMES[d.day]}</b><span aria-hidden="true">${d.icon}</span></span>`).join('');
+    const tiers = D.DAILY_TIERS.map((t, i) => {
+      const open = Game.dailyTierOpen(i);
+      const rw = Game.dailyReward(def, i, true, 0);
+      return `<button type="button" class="btn tier ${open ? '' : 'lock'}" data-action="daily-start" data-tier="${i}" ${open && left > 0 && ids.length ? '' : 'disabled'}>
+        <span class="tt">${t.name}<small>Lv${t.lv}</small></span><small>${open ? esc(rewardText(rw)) + (def.reward.exp ? `・経験値×${def.reward.exp}` : '') : '🔒 ' + t.req + '階クリア'}</small></button>`;
+    }).join('');
+    openModal(`
+      <h2 id="modal-title">${def.icon} ${esc(def.name)} <span class="muted">${D.DAY_NAMES[today]}曜日</span></h2>
+      <div class="week" role="list" aria-label="曜日ごとのダンジョン">${week}</div>
+      <p class="muted">${esc(def.desc)}。任務ははじめからわかっている（魔物の巣をすべて潰す）。物資の箱を見つけると報酬が増え、負けても箱の分は持ち帰れる。</p>
+      <p class="tries">今日あと <b>${left}</b> / ${D.DAILY_TRIES} 回</p>
+      <div class="tiers">${tiers}</div>
+      ${partyBoxHTML()}
+      <div class="modal-actions"><button type="button" class="btn btn-small" data-action="party">編成</button></div>`, { back: () => buildingModal('gate') });
   }
 
   // ---------- 召喚 ----------
@@ -337,14 +449,14 @@
         <div class="dh">
           <h2 id="modal-title">${esc(h.name)} <span class="muted">${c.icon}${esc(c.name)}</span></h2>
           <div class="muted">${esc(h.title || '')}</div>
-          <div><span class="stars">${'★'.repeat(o.star)}</span> <b>Lv${o.lv}</b><span class="muted">/${maxLv}</span> <span class="act">${o.injured ? '🩹けが' : esc(ACT_NAME[o.activity] || '')}</span></div>
+          <div><span class="stars">${'★'.repeat(o.star)}</span> <b>Lv${o.lv}</b><span class="muted">/${maxLv}</span> <span class="act">${o.injured ? '🩹けが' : esc(actName(o))}</span></div>
           <div class="trust" title="${esc(tier.desc)}">♥ ${o.trust} <span class="muted">${esc(tier.name)}</span><i class="bar"><b style="width:${o.trust}%"></b></i></div>
           <div class="expbar" aria-label="経験値"><i style="width:${atMax ? 100 : Math.floor(o.exp / expToNext(o.lv) * 100)}%"></i></div>
         </div>
       </div>
       ${note ? `<p class="note">${note}</p>` : ''}
-      ${prop ? `<div class="prop-inline">${esc(Game.proposalText(prop))}${prop.data.cost ? ` <small>🪙${num(prop.data.cost)}</small>` : ''}
-        <span><button type="button" class="btn btn-small btn-gold" data-action="prop-yes" data-pid="${prop.id}" ${S().gold < (prop.data.cost || 0) ? 'disabled' : ''}>受ける</button>
+      ${prop ? `<div class="prop-inline">${esc(Game.proposalText(prop))}${prop.data.cost || prop.data.food ? ` <small>${Game.costText({ gold: prop.data.cost, food: prop.data.food })}</small>` : ''}
+        <span><button type="button" class="btn btn-small btn-gold" data-action="prop-yes" data-pid="${prop.id}" ${Game.lack({ gold: prop.data.cost || 0, food: prop.data.food || 0 }) ? 'disabled' : ''}>受ける</button>
         <button type="button" class="btn btn-small" data-action="prop-no" data-pid="${prop.id}">断る</button></span></div>` : ''}
       <div class="stat-row">${D.STAT_KEYS.map(k => `<span>${D.STAT_NAMES[k]}<b>${num(st[k])}</b><em class="tal t${tal[k]}">才能 ${D.TALENT_NAMES[tal[k]]}${o.bonus[k] ? ` +${pct(o.bonus[k])}%` : ''}</em></span>`).join('')}</div>
       <div class="eq-row">${eqBtn('weapon')}${eqBtn('armor')}</div>
@@ -370,7 +482,7 @@
       <h2 id="modal-title">${D.EQUIP_KINDS[kind].icon} ${esc(nameOf(id))}の${D.EQUIP_KINDS[kind].name}</h2>
       <p class="effect">いま: <b>${cur ? esc(D.EQUIP_TIERS[cur].name) + ` (+${p(cur)}%)` : 'なし'}</b></p>
       <div class="forge"><div class="frow">${items.length ? items.map(it => `<button type="button" class="btn btn-small" data-action="equip-set" data-id="${id}" data-uid="${it.uid}">${esc(D.EQUIP_TIERS[it.tier].name)}<small>+${p(it.tier)}%</small></button>`).join('') : '<span class="muted">倉庫にない</span>'}</div></div>
-      ${forgeT ? `<h3>作る</h3><div class="forge"><div class="frow">${[1, 2, 3, 4, 5].filter(t => t <= forgeT).map(t => `<button type="button" class="btn btn-small" data-action="forge" data-kind="${kind}" data-tier="${t}" data-id="${id}" ${S().gold < D.EQUIP_TIERS[t].cost ? 'disabled' : ''}>${D.EQUIP_TIERS[t].name}<small>🪙${num(D.EQUIP_TIERS[t].cost)}</small></button>`).join('')}</div></div>` : '<p class="muted">武器倉庫を建てると作れる</p>'}
+      ${forgeT ? `<h3>作る</h3><div class="forge"><div class="frow">${[1, 2, 3, 4, 5].filter(t => t <= forgeT).map(t => `<button type="button" class="btn btn-small" data-action="forge" data-kind="${kind}" data-tier="${t}" data-id="${id}" ${Game.lack(Game.forgePrice(t)) ? 'disabled' : ''}>${D.EQUIP_TIERS[t].name}<small>${priceText(Game.forgePrice(t))}</small></button>`).join('')}</div></div>` : '<p class="muted">武器倉庫を建てると作れる</p>'}
       ${cur ? `<div class="modal-actions"><button type="button" class="btn" data-action="unequip" data-id="${id}" data-kind="${kind}">外す</button></div>` : ''}`, { back: () => heroDetail(id) });
   }
   function farewellModal(id, receiverId, traitIndex) {
@@ -459,20 +571,31 @@
   const EX = {
     ex: null, floorIndex: 0, partyIds: [], raf: 0, last: 0, acc: 0, paused: false, ending: false, cmd: null, orderMode: false,
 
-    start(floorIndex) {
+    start(floorIndex, dailyTier) {
       const party = Game.partyForBattle().filter(p => !Game.isInjured(p.def.id));
       if (!party.length) { toast('塔に行ける英雄がいません'); return; }
+      let extra = {};
+      this.daily = null;
+      if (dailyTier != null) {
+        const r = Game.dailyStart(dailyTier);
+        if (!r.ok) { toast(r.reason === 'tries' ? '今日はもう入れません（また明日）' : r.reason === 'floor' ? `${r.req}階クリアで解放` : '入れません'); return; }
+        extra = r.opts;
+        this.daily = { def: r.def, tier: dailyTier };
+        floorIndex = r.opts.floorIndex;
+      }
+      const hungry = Game.takeRations(party.length);
       closeModal();
       this.floorIndex = floorIndex;
       this.partyIds = party.map(p => p.def.id);
-      this.ex = new E.Expedition(Object.assign({ party, floorIndex, tactics: S().tactics }, Game.battleOptions()));
+      this.ex = new E.Expedition(Object.assign({ party, floorIndex, tactics: S().tactics }, Game.battleOptions(), extra, { hungry }));
+      if (hungry) toast('食料が足りない。英雄たちは空腹のまま出かけた');
       this.paused = false; this.ending = false; this.cmd = null; this.orderMode = false;
       Room.stop();
       $('#scene').hidden = true;
       $('#hud').hidden = true;
       $('#expedition').hidden = false;
       document.body.classList.add('in-tower');
-      $('#x-floor').textContent = `${floorIndex + 1}階`;
+      $('#x-floor').textContent = this.ex.label;
       $('#x-log').innerHTML = '';
       $('#x-proposal').hidden = true;
       Field.mount($('#field'), { onTapUnit: (uid) => this.tapUnit(uid), onTapGround: (x, y) => this.tapGround(x, y) });
@@ -533,7 +656,7 @@
       li.textContent = text;
       if (cls) li.className = cls;
       ol.appendChild(li);
-      while (ol.children.length > 4) ol.firstChild.remove();
+      while (ol.children.length > 5) ol.firstChild.remove();
     },
     banner(text, bad) {
       const el = $('#x-banner');
@@ -547,10 +670,11 @@
       if (!x) return;
       const m = x.mission;
       const md = D.MISSIONS[m.kind];
-      let text = m.revealed ? `${md.name}: ${md.desc}` : '任務: ？？？（手がかりを探している）';
+      let text = m.revealed ? `${md.name}: ${md.desc}` : `任務: ？？？（手掛かり ${m.clues}/${D.CLUE_NEED}）`;
       if (m.revealed && m.kind === 'hunt') text += `（${m.progress}/${x.camps.length}）`;
       if (m.revealed && m.kind === 'relic') text += `（${m.progress}/3）`;
       if (m.revealed && m.kind === 'survive' && m.surviveStarted && !m.done) text += `（あと${Math.ceil(m.surviveLeft)}秒）`;
+      if (x.caches.length && !m.exitOpen) text += `・物資の箱 ${x.caches.filter(c => c.taken).length}/${x.caches.length}`;
       if (m.exitOpen) text = '出口が開いた → 出口へ向かっている';
       $('#x-mission').textContent = text;
       $('#x-mission').classList.toggle('known', m.revealed || m.exitOpen);
@@ -572,7 +696,7 @@
     },
     updateList() {
       if (!this.ex) return;
-      const ACT = { attack: '攻撃', skill: 'スキル', heal: '回復', guard: '防御', slack: 'サボり', move: '移動', explore: '探索', flee: '逃走', wait: '待機', down: '戦闘不能' };
+      const ACT = D.ACTIONS;
       for (const u of this.ex.heroes) {
         const el = document.getElementById('hr-' + u.id);
         if (!el) continue;
@@ -584,7 +708,7 @@
         const a = el.querySelector('.ha');
         a.textContent = ACT[act] || '';
         a.className = 'ha a-' + act;
-        el.querySelector('.hs').textContent = (u.fear > 0 ? '😨' : '') + (u.bleed > 0 ? '🩸' : '') + (u.order ? '📣' : '');
+        el.querySelector('.hs').textContent = (u.fear > 0 ? '😨' : '') + (u.bleed > 0 ? '🩸' : '') + (u.hungry ? '🍞' : '') + (u.order ? '📣' : '');
         el.classList.toggle('dead', !u.alive);
         el.classList.toggle('slack', u.alive && act === 'slack');
         el.classList.toggle('picked', !!this.cmd && this.cmd.uid === u.id);
@@ -680,10 +804,14 @@
     showResult(e) {
       const x = this.ex;
       const win = e.win;
-      const reward = Game.applyBattleResult(this.floorIndex, win, this.partyIds, e.fallen, e.reason, e);
+      const daily = this.daily;
+      const reward = Game.applyBattleResult(this.floorIndex, win, this.partyIds, e.fallen, e.reason, daily ? Object.assign({}, e, { daily: { def: daily.def, tier: daily.tier, caches: e.caches } }) : e);
       renderWallet();
       const fi = this.floorIndex;
-      const hasNext = win && fi + 1 < D.FLOORS.length && Game.isUnlocked(fi + 1);
+      const hasNext = !daily && win && fi + 1 < D.FLOORS.length && Game.isUnlocked(fi + 1);
+      const dailyLeft = daily ? Game.dailyTriesLeft() : 0;
+      const sup = {};
+      for (const k of D.RES_KEYS) if (reward.supplies && reward.supplies[k]) sup[k] = reward.supplies[k];
       const mvpSt = e.heroStats.find(h => h.heroId === e.mvp);
       const mvp = e.mvp ? `<div class="mvp">${SP.heroImg(e.mvp)}<span><small>MVP</small><b>${esc(nameOf(e.mvp))}</b>${mvpSt ? `<span class="muted">与えた ${num(mvpSt.dmg)}・回復 ${num(mvpSt.heal)}</span>` : ''}</span></div>` : '';
       const ups = reward.levelUps.filter(l => !l.training);
@@ -695,18 +823,20 @@
       const title = win ? '勝利' : e.reason === 'retreat' ? '撤退' : e.reason === 'timeout' ? '時間切れ' : '全滅';
       openModal(`
         <p class="result-title ${win ? 'win' : 'lose'}" id="modal-title">${title}</p>
-        <p class="muted center">${fi + 1}階・任務「${esc(md.name)}」${e.mission.done ? '達成' : e.mission.revealed ? '未達成' : 'は不明のまま'}${reward.firstClear ? '・初クリア' : ''}</p>
+        <p class="muted center">${esc(x.label)}・任務「${esc(md.name)}」${e.mission.done ? '達成' : e.mission.revealed ? '未達成' : 'は不明のまま'}${reward.firstClear ? '・初クリア' : ''}${daily ? `・物資の箱 ${e.caches}/3` : e.clues ? `・手掛かり ${e.clues}` : ''}</p>
         ${reward.worldSaved ? `<p class="note gold">✦ 世界「${esc(S().base.name)}」を救った</p>` : ''}
         ${reward.freedZone && !reward.worldSaved ? `<p class="note gold">✦ ${esc(reward.freedZone.name)}を取り戻した${reward.freedZone.natives.length ? `（${reward.freedZone.natives.map(nameOf).join('・')} ♥+10）` : ''}</p>` : ''}
         ${(e.betrayals || []).length ? `<p class="note">⚔ ${e.betrayals.map(b => `${esc(nameOf(b.by))}が${esc(D.heroById[b.victim].name)}を裏切った`).join('、')}</p>` : ''}
         ${mvp}${lost}${upsHTML}
         ${grow.length ? `<p class="muted center grow">成長: ${grow.join(' / ')}</p>` : ''}
         <p class="rewards center">${reward.gold ? '🪙+' + num(reward.gold) + '　' : ''}${reward.shards ? '✦+' + num(reward.shards) + '　' : ''}${reward.gems ? '💎+' + num(reward.gems) : ''}</p>
+        ${Object.keys(sup).length ? `<p class="rewards center sup">持ち帰った物資 ${D.RES_KEYS.filter(k => sup[k]).map(k => D.RESOURCES[k].icon + '+' + num(sup[k])).join('　')}</p>` : ''}
         ${slackers.length ? `<p class="muted center">サボり: ${esc(slackers.join('・'))}</p>` : ''}
         ${reward.newcomer ? `<p class="note">流れ者の英雄「${esc(nameOf(reward.newcomer))}」が来た</p>` : ''}
         <div class="modal-actions">
           ${hasNext ? `<button type="button" class="btn btn-gold" data-action="start" data-floor="${fi + 1}">次へ ${fi + 2}階</button>` : ''}
-          <button type="button" class="btn ${hasNext ? '' : 'btn-gold'}" data-action="start" data-floor="${fi}" ${Game.partyIds().length ? '' : 'disabled'}>${win ? 'もう一度' : '再挑戦'}</button>
+          ${daily ? `<button type="button" class="btn btn-gold" data-action="daily-start" data-tier="${daily.tier}" ${dailyLeft > 0 && Game.partyIds().length ? '' : 'disabled'}>もう一度<small>今日あと${dailyLeft}回</small></button>`
+            : `<button type="button" class="btn ${hasNext ? '' : 'btn-gold'}" data-action="start" data-floor="${fi}" ${Game.partyIds().length ? '' : 'disabled'}>${win ? 'もう一度' : '再挑戦'}</button>`}
           <button type="button" class="btn" data-action="result-home">待機室へ</button>
         </div>`, { locked: true, onClose: () => { if (this.ex === x) this.stop(); } });
     },
@@ -740,11 +870,13 @@
       ${sum.quarrels ? `<p class="note">喧嘩が ${sum.quarrels} 件起きている。仲裁しよう</p>` : ''}
       ${sum.proposals ? `<p class="note">提案が ${sum.proposals} 件ある（広場）</p>` : ''}
       ${sum.healed.length ? `<p class="muted">${esc(sum.healed.filter(id => Game.owned(id)).map(nameOf).join('・'))}のけがが治った</p>` : ''}
+      ${Object.keys(sum.res || {}).length ? `<h3>物資</h3><p class="rewards">${D.RES_KEYS.filter(k => sum.res[k] && Math.abs(sum.res[k]) >= 1).map(k => `${D.RESOURCES[k].icon}${sum.res[k] > 0 ? '+' : ''}${num(Math.round(sum.res[k]))}`).join('　')}</p>` : ''}
+      ${sum.hungry ? '<p class="note">食料が尽きて、英雄たちが空腹になった。畑を大きくするか、食料を手に入れよう</p>' : ''}
       ${close}`);
     return true;
   }
   function clockTick() {
-    if (!$('#expedition').hidden) return;
+    if (!$('#expedition').hidden || !$('#bye').hidden) return;
     const sum = Game.advance(Date.now(), true);
     const escalated = Game.updateQuarrels(Date.now(), true);
     for (const r of escalated || []) {
@@ -753,6 +885,18 @@
     }
     if (sum || (escalated && escalated.length)) { renderWallet(); renderNotices(); Room.refresh(); }
     else if (S().quarrels.length) renderNotices();
+  }
+
+  // ---------- ログアウト（保存して、アプリを閉じる） ----------
+  function logout() {
+    Game.save();
+    closeModal();
+    Room.stop();
+    $('#app').classList.add('closed');
+    $('#bye').hidden = false;
+    $('#bye button').focus({ preventScroll: true });
+    // ホーム画面のアプリやスクリプトで開いた窓なら閉じられる。閉じられなければ「おつかれさまでした」の画面のまま
+    try { window.close(); } catch (e) { /* ブラウザが閉じるのを止めた */ }
   }
 
   // ---------- 遊び方 ----------
@@ -765,7 +909,9 @@
         <li>🏰 建物や英雄をタップ（次元の門 → 塔・召喚）</li>
         <li>👆 ドラッグで見回す・ピンチで寄る</li>
         <li>⏳ 待機室の時間は現実と同じ。英雄は勝手に訓練し、喧嘩もする。仲裁はマスターの役目</li>
-        <li>🗼 塔の中は英雄まかせ。英雄をタップで命令、「指示」で行き先を決める</li>
+        <li>🗼 塔の中は英雄まかせ。一緒に探索し、手掛かりを調べると任務がわかる。英雄をタップで命令</li>
+        <li>📦 畑・石切り場・鉱山で物資を作る。城壁を広げて陣地を大きくする</li>
+        <li>📅 次元の門から曜日のダンジョンへ（曜日ごとに手に入る物資が変わる）</li>
         <li>💬 英雄の声は聞こえない。提案に答えて信頼を深める</li>
       </ul>
       <p class="note">⚠ 倒れた英雄は二度と戻らない。同じ英雄が現れることもない</p>
@@ -785,7 +931,22 @@
       case 'close': closeModal(); break;
       case 'back': { const b = modalBack; if (b) b(); break; }
       case 'help': showIntro(); break;
-      case 'rename': { const n = prompt('待機室の名前（滅んだ世界の名前）', S().base.name); if (n !== null && Game.renameBase(n)) renderWallet(); break; }
+      case 'logout':
+        openModal(`<h2 id="modal-title">⏻ ログアウト</h2><p>保存して、アプリを閉じますか？</p><p class="muted">待機室の時間は、閉じているあいだも進みます（最大4時間）。</p>
+          <div class="modal-actions"><button type="button" class="btn" data-action="close">やめる</button><button type="button" class="btn btn-gold" data-action="logout-yes">ログアウト</button></div>`, { focus: '[data-action="close"]' });
+        break;
+      case 'logout-yes': logout(); break;
+      case 'bye-back': $('#bye').hidden = true; $('#app').classList.remove('closed'); clockTick(); Room.start(); refreshHome(); $('#logout').focus({ preventScroll: true }); break;
+      case 'supplies': suppliesModal(); break;
+      case 'fort': fortModal(); break;
+      case 'fort-build': { const r = Game.buildFort(el.dataset.key); if (!r.ok) { toast(r.reason === 'floor' ? `${r.req}階クリアで解放` : lackText(r.reason)); break; } renderWallet(); Room.refresh(); renderNotices(); fortModal(`${D.FORT[el.dataset.key].name}が Lv${r.lv} になった`); break; }
+      case 'daily': dailyModal(); break;
+      case 'daily-start': {
+        const tier = Number(el.dataset.tier);
+        if (EX.ex) { modalOnClose = null; $('#modal').hidden = true; EX.stop(); }
+        EX.start(0, tier);
+        break;
+      }
       case 'building': buildingModal(el.dataset.key); break;
       case 'build': doBuild(el.dataset.key); break;
       case 'quarrel': quarrelModal(Number(el.dataset.qid)); break;
@@ -811,7 +972,7 @@
         const pid = Number(el.dataset.pid);
         const p = S().proposals.find(x => x.id === pid);
         const r = Game.answerProposal(pid, a === 'prop-yes');
-        if (!r.ok) { toast(r.reason === 'gold' ? '金貨が足りません' : 'できません'); break; }
+        if (!r.ok) { toast(lackText(r.reason)); break; }
         toast(r.accepted ? `${nameOf(p.heroId)}の提案を受けた（♥+${r.trust}）` : `${nameOf(p.heroId)}の提案を断った（♥${r.trust}）`);
         renderWallet(); renderNotices(); Room.refresh();
         if ($('#modal [data-hero-detail]')) heroDetail(p.heroId); else buildingModal('plaza');
@@ -819,13 +980,13 @@
       }
       case 'forge': {
         const r = Game.forge(el.dataset.kind, Number(el.dataset.tier), id || null);
-        if (!r.ok) { toast(r.reason === 'gold' ? '金貨が足りません' : '作れません'); break; }
+        if (!r.ok) { toast(lackText(r.reason)); break; }
         renderWallet();
         toast(`${D.EQUIP_TIERS[r.item.tier].name}の${D.EQUIP_KINDS[r.item.kind].name}を作った`);
         if (id) heroDetail(id); else buildingModal('armory');
         break;
       }
-      case 'brew': { const r = Game.brew(el.dataset.key); if (!r.ok) { toast(r.reason === 'gold' ? '金貨が足りません' : r.reason === 'cap' ? 'これ以上持てない' : '作れません'); break; } renderWallet(); buildingModal('alchemy'); break; }
+      case 'brew': { const r = Game.brew(el.dataset.key); if (!r.ok) { toast(r.reason === 'cap' ? 'これ以上持てない' : lackText(r.reason)); break; } renderWallet(); buildingModal('alchemy'); break; }
       case 'equip': equipModal(id, el.dataset.kind); break;
       case 'equip-set': Game.equip(id, Number(el.dataset.uid)); heroDetail(id); break;
       case 'unequip': Game.unequip(id, el.dataset.kind); heroDetail(id); break;
@@ -870,7 +1031,7 @@
       default: break;
     }
   });
-  $('#x-speed').addEventListener('click', () => { S().speed = S().speed >= 4 ? 1 : S().speed * 2; Game.save(); EX.updateSpeed(); });
+  $('#x-speed').addEventListener('click', () => { S().speed = S().speed >= 4 ? 1 : S().speed * 2; Game.save(); EX.updateSpeed(); toast(S().speed === 1 ? 'ふつうの速さ（英雄と一緒に歩く速さ）' : `${S().speed}倍の速さ`); });
   $('#x-tactics').addEventListener('click', () => EX.openTactics());
   $('#x-retreat').addEventListener('click', () => EX.retreat());
   $('#x-order').addEventListener('click', () => { EX.orderMode = !EX.orderMode; EX.updateOrderMode(); toast(EX.orderMode ? '指示: 地面をタップすると全員がそこへ向かう' : 'おまかせ: 英雄が自分で動く'); });
@@ -881,12 +1042,12 @@
   $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal' && !$('#modal').dataset.locked) closeModal(); });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) Room.stop();
-    else if ($('#expedition').hidden) { clockTick(); Room.start(); }
+    else if ($('#expedition').hidden && $('#bye').hidden) { clockTick(); Room.start(); }
   });
 
   // ---------- 起動 ----------
   Game.init();
-  if (S().speed !== 1 && S().speed !== 2 && S().speed !== 4) S().speed = 2;
+  if (S().speed !== 1 && S().speed !== 2 && S().speed !== 4) S().speed = 1;
   const away = Game.advance(Date.now(), false);
   renderWallet();
   mountRoom();

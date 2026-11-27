@@ -202,19 +202,24 @@
   }
 
   // ---------- 遠征（塔の1つの階） ----------
-  const TIME_LIMIT = 420;          // 秒（ゲームの中の時間）
+  const TIME_LIMIT = 900;          // 秒（ゲームの中の時間。第6版でゆっくり探索するようにしたので長め）
+  const PACE = 1.8;                // 歩く速さ（タイル/秒・速さ100のとき）
+  const CD = 1.3;                  // 攻撃の間隔の倍率（第6版でゆっくりにした）
   const AGGRO = 5.5, LEASH = 11, SIGHT = 6.5;
   const RANGE = { warrior: 1.4, swordsman: 1.4, thief: 1.4, archer: 5, mage: 4.5, priest: 4 };
 
   /**
-   * opts: { party:[{def, owned, row, tactic}], floorIndex, tactics, enemyMult, cmdCost, potions, rels, seed, rng }
+   * opts: { party:[{def, owned, row, tactic}], floorIndex, tactics, enemyMult, cmdCost, potions, rels, seed, rng,
+   *         scout（見張り塔の Lv）, hungry（食料が足りない）, floor / mission / caches / label（曜日のダンジョン） }
    *   rels: (heroIdA, heroIdB) => 仲（-100〜100）
    */
   function Expedition(opts) {
     this.rng = opts.rng || Math.random;
     this.tactics = opts.tactics;
     this.floorIndex = opts.floorIndex;
-    this.floor = D.FLOORS[opts.floorIndex];
+    this.floor = opts.floor || D.FLOORS[opts.floorIndex];
+    this.label = opts.label || `${opts.floorIndex + 1}階`;
+    this.daily = !!opts.floor;
     this.enemyMult = opts.enemyMult || 1;
     this.cmdCost = opts.cmdCost || 6;
     this.cmdCharge = this.cmdCost;
@@ -233,8 +238,8 @@
     // 任務
     const boss = this.floor.waves.some(wv => wv.some(k => D.ENEMIES[k].boss));
     const kinds = ['hunt', 'relic', 'escort', 'explore', 'survive'];
-    const kind = boss ? 'boss' : kinds[Math.floor(map.rng() * kinds.length)];
-    this.mission = { kind, revealed: false, done: false, progress: 0, goal: kind === 'relic' ? 3 : 1, exitOpen: false, exitFound: kind !== 'explore', surviveLeft: 90, surviveStarted: false };
+    const kind = opts.mission || (boss ? 'boss' : kinds[Math.floor(map.rng() * kinds.length)]);
+    this.mission = { kind, revealed: false, clues: 0, done: false, progress: 0, goal: kind === 'relic' ? 3 : 1, exitOpen: false, exitFound: kind !== 'explore', surviveLeft: 90, surviveStarted: false };
     // 英雄
     this.heroes = opts.party.map((p, i) => {
       const st = heroStats(p.def, p.owned);
@@ -248,8 +253,10 @@
         trust: p.owned.trust == null ? 50 : p.owned.trust, traits: tr, healMul: 1 + traitVal(tr, 'mend'), drain: traitVal(tr, 'drain'),
         undying: traitVal(tr, 'undying'), undyingUsed: false, counter: traitVal(tr, 'counter'),
         tacOverride: p.tactic || null, x: pos.x, y: pos.y, stats: { dmg: 0, heal: 0, taken: 0, kills: 0, slack: 0, acts: 0, hits: 0 },
+        hungry: !!opts.hungry,
       });
     });
+    if (opts.hungry) for (const u of this.heroes) { u.atk = Math.round(u.atk * D.STATUS.hunger.mult); u.def = Math.round(u.def * D.STATUS.hunger.mult); }
     // 敵の巣・NPC・遺物
     this.enemies = [];
     const placed = [map.start];
@@ -271,17 +278,47 @@
     placed.push(npcSpot);
     const npcDef = D.NPCS[Math.floor(map.rng() * D.NPCS.length)];
     this.npc = { name: kind === 'escort' ? '取り残された生存者' : npcDef.name, kind: kind === 'escort' ? 'npc' : npcDef.kind, x: npcSpot.x, y: npcSpot.y, met: false, following: false, spd: 90 };
+    if (this.daily) this.npc.hidden = true;
+    // 手掛かり（NPC・石碑のほかに、足跡・書き置き・亡骸・壁画が散らばっている）
+    this.clues = [];
+    if (!this.daily) {
+      if (kind !== 'escort') this.clues.push({ id: 0, kind: this.npc.kind === 'stele' ? 'stele' : 'npc', x: npcSpot.x, y: npcSpot.y, found: false, seen: false, npc: true });
+      const minor = ['tracks', 'note', 'corpse', 'mural'];
+      for (let c = 0; c < 3; c++) {
+        const sp = placeAt(map, 0.08 + c * 0.12, 0.45 + c * 0.15, placed, 5) || placeAt(map, 0.05, 1, placed, 3);
+        if (!sp) continue;
+        placed.push(sp);
+        const k = minor.splice(Math.floor(map.rng() * minor.length), 1)[0];
+        this.clues.push({ id: this.clues.length, kind: k, x: sp.x, y: sp.y, found: false, seen: false });
+      }
+    }
     this.relics = [];
     if (kind === 'relic') for (let r = 0; r < 3; r++) { const sp = placeAt(map, 0.35, 1, placed, 6) || placeAt(map, 0.2, 1, placed, 3); if (sp) { placed.push(sp); this.relics.push({ x: sp.x, y: sp.y, taken: false }); } }
-    this.reveal(map.start.x, map.start.y, SIGHT + 1);
+    // 曜日のダンジョン: 物資の箱
+    this.caches = [];
+    for (let r = 0; r < (opts.caches || 0); r++) { const sp = placeAt(map, 0.15, 1, placed, 5) || placeAt(map, 0.1, 1, placed, 3); if (sp) { placed.push(sp); this.caches.push({ x: sp.x, y: sp.y, taken: false }); } }
+    // 見張り塔の偵察
+    this.scout = Math.max(0, Math.min(5, opts.scout || 0));
+    this.reveal(map.start.x, map.start.y, SIGHT + 1 + this.scout * 1.5);
+    if (this.scout >= 3) for (const c of this.clues) { c.seen = true; this.reveal(c.x, c.y, 1.5); }
+    if (this.scout >= 5) for (const c of this.camps) this.reveal(c.x, c.y, 1.5);
     this.lastCombat = -99;
-    this.note(`${this.floorIndex + 1}階に入った。任務はまだわからない`, 'sys');
+    if (this.daily) {
+      this.mission.revealed = true;
+      const m = D.MISSIONS[kind];
+      this.note(`${this.label}に入った。任務「${m.name}: ${m.desc}」`, 'mission');
+    } else {
+      this.note(`${this.label}に入った。任務はまだわからない。手掛かりを探そう`, 'sys');
+      if (this.scout >= 3 && this.clues.length) this.note(`見張り塔の偵察で、手掛かりの場所が${this.clues.length}つわかっている`, 'sys');
+    }
+    if (opts.hungry) this.note(D.STATUS.hunger.msg.replace('{n}', '英雄たち'), 'hunger');
   }
 
   const P = Expedition.prototype;
   P.unit = function (u) {
     return Object.assign({ uid: ++this.uid, alive: true, atkT: this.rng() * 0.8, skillT: 2 + this.rng() * 2, guardT: 0, tauntT: 0, defUpT: 0, atkUpT: 0,
-      fear: 0, bleed: 0, bleedT: 0, path: null, pathT: 0, goal: null, order: null, action: 'wait', slackT: 0, fleeT: 0, target: null, think: 0, face: 1 }, u);
+      fear: 0, bleed: 0, bleedT: 0, path: null, pathT: 0, goal: null, order: null, action: 'wait', slackT: 0, fleeT: 0, target: null, think: 0, face: 1,
+      pace: 1, dirX: 1, dirY: 0, inv: null }, u);
   };
   P.freeNear = function (x, y) {
     const { w, tiles } = this.map;
@@ -481,14 +518,29 @@
   P.retreat = function () { if (this.state === 'running') this.finish(false, 'retreat'); };
 
   // ---------- 任務 ----------
-  P.revealMission = function (by) {
+  /** 手掛かりを調べ終えた */
+  P.findClue = function (u, c) {
+    if (c.found) return;
+    c.found = true;
+    if (c.npc) this.npc.met = true;
+    const def = D.CLUES[c.kind];
+    const hints = D.CLUE_HINTS[this.mission.kind];
+    const hint = def.hint >= 3 ? D.MISSIONS[this.mission.kind].desc : hints[def.hint];
+    this.mission.clues = Math.min(D.CLUE_NEED, this.mission.clues + def.pts);
+    const verb = def.verb.replace('{npc}', this.npc.name);
+    this.emit({ type: 'clue', id: c.id, kind: c.kind, x: c.x, y: c.y, unit: u.id });
+    if (this.mission.revealed) { this.note(`${u.name}が${verb}。${hint}`, 'clue', u); return; }
+    if (this.mission.clues < D.CLUE_NEED) this.note(`${u.name}が${verb}。${hint}（手掛かり ${this.mission.clues}/${D.CLUE_NEED}）`, 'clue', u);
+    else this.revealMission(u, `${verb}。${hint}`);
+  };
+  P.revealMission = function (by, how) {
     if (this.mission.revealed) return;
     this.mission.revealed = true;
+    this.mission.clues = D.CLUE_NEED;
     const m = D.MISSIONS[this.mission.kind];
-    const src = this.npc.kind === 'stele' ? '石碑を調べた' : `${this.npc.name}から話を聞いた`;
-    this.note(`${by.name}が${src} —— 任務「${m.name}: ${m.desc}」が判明`, 'mission', by);
+    this.note(`${by.name}が${how || '手掛かりをつなぎ合わせた'} —— 任務「${m.name}: ${m.desc}」が判明`, 'mission', by);
     this.emit({ type: 'mission', mission: this.mission });
-    if (this.mission.kind === 'escort') this.npc.following = true;
+    if (this.mission.kind === 'escort' && this.npc.met) this.npc.following = true;
     if (this.mission.kind === 'survive') { this.mission.surviveStarted = true; this.surviveSpawnT = 4; }
   };
   P.updateMission = function (dt) {
@@ -500,6 +552,7 @@
     else if (m.kind === 'relic') done = this.relics.filter(r => r.taken).length >= 3;
     else if (m.kind === 'escort') done = this.npc.following && this.dist(this.npc, this.map.exit) < 2.5;
     else if (m.kind === 'explore') done = m.exitFound;
+    else if (m.kind === 'survive' && !m.surviveStarted && this.time > 150) { m.surviveStarted = true; this.surviveSpawnT = 4; this.note('魔物の大群が近づいてくる……', 'warn'); }
     else if (m.kind === 'survive' && m.surviveStarted) {
       m.surviveLeft -= dt;
       this.surviveSpawnT -= dt;
@@ -533,7 +586,7 @@
   P.step = function (dt) {
     if (this.state !== 'running') { const ev = this.events; this.events = []; return ev; }
     this.time += dt;
-    if (this.cmdCharge < this.cmdCost) this.cmdCharge = Math.min(this.cmdCost, this.cmdCharge + dt / 1.2);
+    if (this.cmdCharge < this.cmdCost) this.cmdCharge = Math.min(this.cmdCost, this.cmdCharge + dt / 1.5);
     if (this.proposal && this.time > this.proposal.expires) { this.emit({ type: 'proposalExpired', proposal: this.proposal }); this.proposal = null; }
     const units = this.heroes.concat(this.enemies);
     for (const u of units) {
@@ -603,11 +656,12 @@
     }
     u.pathT -= dt;
     const next = u.path[0] || { x: tx, y: ty };
-    const sp = 2.4 * Math.sqrt((u.spd || 90) / 100) * (u.fear > 0 ? 0.8 : 1) * dt;
+    const sp = PACE * (u.pace || 1) * Math.sqrt((u.spd || 90) / 100) * (u.fear > 0 ? 0.8 : 1) * dt;
     const dx = next.x - u.x, dy = next.y - u.y, dd = Math.hypot(dx, dy);
     if (dd <= sp) { u.x = next.x; u.y = next.y; if (u.path.length) u.path.shift(); }
     else { u.x += dx / dd * sp; u.y += dy / dd * sp; }
     if (Math.abs(dx) > 0.05) u.face = dx < 0 ? -1 : 1;
+    if (dd > 0.01) { u.dirX = dx / dd; u.dirY = dy / dd; }
     u.moving = true;
     if (u.side === 'hero') this.reveal(u.x, u.y, SIGHT);
     return false;
@@ -636,6 +690,7 @@
   // 英雄の思考
   P.heroThink = function (u, dt) {
     u.moving = false;
+    u.pace = 1;
     const T0 = this.tactics;
     if (u.order && this.time > u.order.until) u.order = null;
     if (u.slackT > 0) { u.slackT -= dt; u.action = 'slack'; return; }
@@ -673,7 +728,7 @@
         const force = u.order && u.order.type === 'skill';
         if (sk && sk.type === 'heal_all' && u.skillT <= 0 && (force || needy.length >= 2 || needy[0].hp / needy[0].maxHp < 0.3)) {
           if (u.atkT <= 0) {
-            u.skillT = sk.cd * 3.5; u.atkT = 1.4 * 100 / u.spd; this.summary.skills++; u.stats.acts++;
+            u.skillT = sk.cd * 3.5 * CD; u.atkT = 1.4 * CD * 100 / u.spd; this.summary.skills++; u.stats.acts++;
             this.emit({ type: 'skill', from: u.id, name: sk.name, skill: sk.type, x: u.x, y: u.y });
             for (const a of allies) if (this.dist(a, u) < 7) this.heal(u, a, sk.mult);
             if (force) u.order = null;
@@ -683,7 +738,7 @@
         }
         const t = needy[0];
         if (this.dist(t, u) > 4.5) { u.action = 'move'; this.moveToward(u, t.x, t.y, dt, 3.5); return; }
-        if (u.atkT <= 0) { u.atkT = 1.5 * 100 / u.spd; this.heal(u, t, 1.0); u.stats.acts++; }
+        if (u.atkT <= 0) { u.atkT = 1.5 * CD * 100 / u.spd; this.heal(u, t, 1.0); u.stats.acts++; }
         u.action = 'heal';
         return;
       }
@@ -741,11 +796,11 @@
     const bossPresent = this.aliveEnemies().some(e => e.boss && this.dist(e, u) < 10);
     const force = u.order && u.order.type === 'skill';
     const allow = u.skillT <= 0 && (force || tac.skill === 'now' || bossPresent || u.hp / u.maxHp < 0.35);
-    u.atkT = 1.6 * 100 / u.spd;
+    u.atkT = 1.6 * CD * 100 / u.spd;
     u.stats.acts++;
     u.face = target.x < u.x ? -1 : 1;
     if (sk && allow && sk.type === 'taunt') {
-      u.skillT = sk.cd * 3.5; u.tauntT = 6; u.guardT = 4; this.summary.skills++;
+      u.skillT = sk.cd * 3.5 * CD; u.tauntT = 6; u.guardT = 4; this.summary.skills++;
       for (const e of this.aliveEnemies()) if (this.dist(e, u) < 6) e.target = u;
       if (sk.partyDef) for (const a of this.aliveHeroes()) if (this.dist(a, u) < 7) a.defUpT = 8;
       this.emit({ type: 'skill', from: u.id, name: sk.name, skill: 'taunt', x: u.x, y: u.y });
@@ -753,7 +808,7 @@
       return;
     }
     if (sk && allow && (sk.type === 'single' || sk.type === 'multi' || sk.type === 'aoe')) {
-      u.skillT = sk.cd * 3.5; this.summary.skills++;
+      u.skillT = sk.cd * 3.5 * CD; this.summary.skills++;
       this.emit({ type: 'skill', from: u.id, to: target.id, name: sk.name, skill: sk.type, x: target.x, y: target.y });
       if (sk.type === 'single') { this.damage(u, target, sk.mult, sk.sure, false, 'skill'); if (sk.partyAtk) for (const a of this.aliveHeroes()) a.atkUpT = 8; }
       else if (sk.type === 'multi') {
@@ -771,29 +826,86 @@
     u.action = 'attack';
   };
 
+  /** 隊列の先頭（生きている英雄のうち、編成の最初の人） */
+  P.leader = function () { return this.aliveHeroes()[0] || null; };
+  /** 先頭のうしろの、自分の場所 */
+  P.slotOf = function (u, leader) {
+    const others = this.aliveHeroes().filter(h => h !== leader);
+    const k = Math.max(0, others.indexOf(u));
+    const back = 1.3 + Math.floor(k / 2) * 1.1, side = (k % 2 ? 0.9 : -0.9);
+    const x = leader.x - leader.dirX * back - leader.dirY * side, y = leader.y - leader.dirY * back + leader.dirX * side;
+    return this.freeNear(Math.round(Math.max(1, Math.min(this.map.w - 2, x))), Math.round(Math.max(1, Math.min(this.map.h - 2, y))));
+  };
   P.pursueMission = function (u, dt) {
     const m = this.mission;
-    const leader = this.aliveHeroes()[0];
-    let goal = null;
-    if (m.exitOpen) goal = this.map.exit;
-    else if (!this.npc.met) goal = this.npc;
-    else if (m.kind === 'hunt' || m.kind === 'boss') goal = this.camps.filter(cc => !cc.cleared && (m.kind === 'hunt' || cc.boss)).sort((a, b) => this.dist(a, u) - this.dist(b, u))[0] || null;
-    else if (m.kind === 'relic') goal = this.relics.filter(rr => !rr.taken).sort((a, b) => this.dist(a, u) - this.dist(b, u))[0] || null;
-    else if (m.kind === 'escort') goal = this.map.exit;
-    else if (m.kind === 'survive') goal = leader === u ? null : leader;
-    if (m.kind === 'explore' && this.npc.met && !m.exitFound) goal = this.frontier(u);
-    if (!goal) goal = this.frontier(u);
-    if (leader && leader !== u && this.dist(leader, u) > 6) goal = leader;
-    if (!goal) { u.action = 'wait'; return; }
-    u.action = 'explore';
-    this.moveToward(u, goal.x, goal.y, dt, goal === leader ? 1.8 : 0.6);
-    if (!this.npc.met && this.dist(u, this.npc) < 1.6) { this.npc.met = true; this.revealMission(u); }
+    const leader = this.leader();
+    // 手掛かりを調べている途中
+    if (u.inv) {
+      const c = u.inv.clue;
+      if (c.found) u.inv = null;
+      else {
+        u.action = 'investigate';
+        u.inv.t -= dt;
+        if (u.inv.t <= 0) { u.inv = null; this.findClue(u, c); }
+        return;
+      }
+    }
+    // 近くの手掛かりは、通りかかった英雄が調べる
+    for (const c of this.clues) {
+      if (!c.found && this.dist(u, c) < 1.4 && !this.heroes.some(h => h.alive && h.inv && h.inv.clue === c)) {
+        u.inv = { clue: c, t: c.npc ? 2 : 2.8 };
+        u.action = 'investigate';
+        c.seen = true;
+        this.note(`${u.name}が${c.kind === 'npc' ? this.npc.name + 'に話しかけている' : D.CLUES[c.kind].name + 'を調べている'}`, 'sys', u);
+        return;
+      }
+    }
+    // 拾えるもの
     for (const r of this.relics) if (!r.taken && this.dist(u, r) < 1.2) {
       r.taken = true;
       this.emit({ type: 'relic', x: r.x, y: r.y });
       this.note(`${u.name}が遺物を拾った（${this.relics.filter(rr => rr.taken).length}/3）`, 'mission', u);
     }
+    for (const r of this.caches) if (!r.taken && this.dist(u, r) < 1.2) {
+      r.taken = true;
+      this.emit({ type: 'relic', x: r.x, y: r.y, cache: true });
+      this.note(`${u.name}が物資の箱を見つけた（${this.caches.filter(rr => rr.taken).length}/${this.caches.length}）`, 'mission', u);
+    }
+    if (m.kind === 'escort' && !this.npc.met && this.dist(u, this.npc) < 1.6) {
+      this.npc.met = true; this.npc.following = true;
+      if (!m.revealed) this.revealMission(u, `${this.npc.name}を見つけた`);
+      else this.note(`${u.name}が${this.npc.name}を見つけた。出口まで連れて行こう`, 'mission', u);
+    }
     if (m.kind === 'explore' && !m.exitFound && this.dist(u, this.map.exit) < 3) { m.exitFound = true; this.note(`${u.name}が隠された出口を見つけた`, 'mission', u); }
+    // 先頭以外は、先頭のうしろについて歩く（いっしょに探索する）
+    if (leader && leader !== u) {
+      const slot = this.slotOf(u, leader);
+      const d = this.dist(u, slot);
+      u.action = 'follow';
+      if (d < 0.5) { u.face = leader.face; return; }
+      u.pace = d > 4 ? 1.1 : 0.75;
+      this.moveToward(u, slot.x, slot.y, dt, 0.3);
+      return;
+    }
+    // 先頭: 行き先を決める
+    const known = (p) => this.explored[Math.round(p.y) * this.map.w + Math.round(p.x)] === 1;
+    const seenClue = (c) => { if (c.found) return false; if (!c.seen && known(c) && this.dist(c, u) < SIGHT + 1 && lineOfSight(this.map, u.x, u.y, c.x, c.y)) c.seen = true; return c.seen; };
+    const nearest = (list) => list.sort((a, b) => this.dist(a, u) - this.dist(b, u))[0] || null;
+    let goal = null;
+    if (m.exitOpen) goal = this.map.exit;
+    else if (!m.revealed) goal = nearest(this.clues.filter(seenClue));
+    else if (m.kind === 'hunt' || m.kind === 'boss') goal = nearest(this.camps.filter(cc => !cc.cleared && (m.kind === 'hunt' || cc.boss) && known(cc)));
+    else if (m.kind === 'relic') goal = nearest(this.relics.filter(rr => !rr.taken && known(rr)));
+    else if (m.kind === 'escort') goal = this.npc.met ? this.map.exit : (known(this.npc) ? this.npc : null);
+    if (!goal && !m.exitOpen) goal = nearest(this.caches.filter(r => !r.taken && known(r)));
+    if (!goal && !m.exitOpen && m.revealed && m.kind === 'survive') { u.action = 'guard'; return; }
+    if (!goal) goal = this.frontier(u);
+    if (!goal) { u.action = 'wait'; return; }
+    // 遅れている仲間を待つ
+    if (this.aliveHeroes().some(h => h !== u && this.dist(h, u) > 5.5 && h.action !== 'flee')) { u.action = 'wait'; return; }
+    u.action = 'explore';
+    u.pace = 0.7;
+    this.moveToward(u, goal.x, goal.y, dt, 0.6);
   };
 
   /** まだ見ていない場所のうち近いところ */
@@ -843,10 +955,10 @@
     if (d > u.range) { u.action = 'move'; this.moveToward(u, t.x, t.y, dt, u.range - 0.2); return; }
     u.face = t.x < u.x ? -1 : 1;
     if (u.atkT > 0) return;
-    u.atkT = 1.7 * 100 / u.spd;
+    u.atkT = 1.7 * CD * 100 / u.spd;
     u.action = 'attack';
     if (u.skill && u.skillT <= 0) {
-      u.skillT = u.skill.cd * 3.5;
+      u.skillT = u.skill.cd * 3.5 * CD;
       this.emit({ type: 'skill', from: u.id, to: t.id, name: u.skill.name, skill: u.skill.type, x: t.x, y: t.y, enemy: true });
       if (u.skill.type === 'aoe') { for (const h of this.aliveHeroes()) if (this.dist(h, u) < 6) this.damage(u, h, u.skill.mult, false, false, 'skill'); }
       else this.damage(u, t, u.skill.mult, false, false, 'skill');
@@ -900,7 +1012,8 @@
       win, reason: reason || null, fallen: this.fallenHeroIds(), mvp: mvp ? mvp.heroId : null,
       heroStats: this.heroes.map(h => ({ heroId: h.heroId, alive: h.alive, score: Math.round(score(h)), ...h.stats })),
       trustDelta: this.trustDelta, potionsUsed: this.potionsUsed, betrayals: this.betrayals, time: this.time,
-      mission: { kind: this.mission.kind, revealed: this.mission.revealed, done: this.mission.done },
+      mission: { kind: this.mission.kind, revealed: this.mission.revealed, done: this.mission.done }, caches: this.caches.filter(c => c.taken).length,
+      clues: this.clues.filter(c => c.found).length,
     };
     this.emit(Object.assign({ type: 'end' }, this.result));
   };
@@ -913,7 +1026,7 @@
     return this.result;
   };
 
-  const api = { Expedition, heroStats, enemyStats, power, STANCE, disobeyChance, trustBonus, trustTier, traitVal, makeMap, findPath, lineOfSight, TILE: T, TIME_LIMIT };
+  const api = { Expedition, heroStats, enemyStats, power, STANCE, disobeyChance, trustBonus, trustTier, traitVal, makeMap, findPath, lineOfSight, TILE: T, TIME_LIMIT, PACE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BattleEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);
