@@ -69,35 +69,35 @@
    */
   const HEROES = [
     // ★3
-    { id: 'seres',    name: 'セレス',   title: '光の剣士',   cls: 'swordsman', rarity: 3, pers: 'brave', land: 'astra',
+    { id: 'seres',    name: 'セレス',   title: '光の剣士',   cls: 'swordsman', rarity: 3, special: true, pers: 'brave', land: 'astra',
       skill: { name: '聖光斬', type: 'single', mult: 2.8, cd: 3, desc: '敵1体に大ダメージ' }, line: '光よ、切り裂け！',
       look: { skin: '#f4d6bf', hair: '#f0d070', style: 'long', eye: '#3a6ad8', top: 'coat', c1: '#e8eaf4', c2: '#d4a640', pants: '#2e3a6e', boots: '#5a3a2a', weapon: 'sword', gear: ['cape'], cape: '#2f4fa8', build: 'slim', h: 0 },
       memories: ['夜空を見上げると、懐かしくて、少し怖い。',
         '星の海アストラでは、星ひとつひとつに国があった。私はその守り手の一人だった。',
         '星喰らいが現れて、星がひとつ、またひとつと消えた。空が暗くなるたびに、国が消えていった。',
         '最後の星で、私は剣を折られた。……それでも、光はまだここにある。今度は、折れない。'] },
-    { id: 'verna',    name: 'ヴェルナ', title: '炎の魔女',   cls: 'mage',      rarity: 3, pers: 'whimsical', land: 'nox',
+    { id: 'verna',    name: 'ヴェルナ', title: '炎の魔女',   cls: 'mage',      rarity: 3, special: true, pers: 'whimsical', land: 'nox',
       skill: { name: '業火', type: 'aoe', mult: 1.4, cd: 3, desc: '敵全体にダメージ' }, line: 'まとめて燃えなさい！',
       look: { skin: '#f6dac6', hair: '#d8402a', style: 'long', eye: '#f0a030', top: 'robe', c1: '#3e1f56', c2: '#e8902a', pants: '#2a1838', boots: '#2a1838', weapon: 'staff', gem: '#ff6a3a', gear: ['wizardHat'], hat: '#2c1440', build: 'slim', h: 0 },
       memories: ['火を見ていると落ち着く。燃やしたいわけじゃない……たぶん。',
         '影の都ノクスの魔導院で、一番の問題児だった。先生たちはいつも頭を抱えていた。',
         '都の灯りがひとつずつ影に食われていった。わたしの炎だけが、最後まで消えなかった。',
         '影の騎士は、わたしに炎を教えてくれた師匠だった。……弟子として、けじめをつける。'] },
-    { id: 'gard',     name: 'ガルド',   title: '鉄の守護者', cls: 'warrior',   rarity: 3, pers: 'caring', land: 'necroa',
+    { id: 'gard',     name: 'ガルド',   title: '鉄の守護者', cls: 'warrior',   rarity: 3, special: true, pers: 'caring', land: 'necroa',
       skill: { name: '不動の誓い', type: 'taunt', partyDef: true, cd: 4, desc: '敵の攻撃を引きつけ、味方全員の防御を上げる' }, line: '俺の後ろに下がれ！',
       look: { skin: '#d29a76', hair: '#5e3a22', style: 'short', eye: '#3a2a1a', top: 'armor', c1: '#8a2a2a', c2: '#d4a640', pants: '#3a3030', boots: '#8a92a6', weapon: 'shield', gear: ['beard'], beard: '#5e3a22', build: 'broad', h: -1 },
       memories: ['盾を構えると、心が静まる。誰かを背中にかばう形が、体にしみついている。',
         '帝国の近衛だった。皇帝ではなく、城下の子どもたちを守るのが好きだった。',
         '骨の竜が空を覆った夜、死んだ者たちが起き上がり、生きている者を襲いはじめた。',
         '倒れた部下たちが、骨になって俺に剣を向けた。……もう誰も、あんな姿にはさせない。'] },
-    { id: 'riina',    name: 'リィナ',   title: '森の射手',   cls: 'archer',    rarity: 3, pers: 'careful', land: 'garm',
+    { id: 'riina',    name: 'リィナ',   title: '森の射手',   cls: 'archer',    rarity: 3, special: true, pers: 'careful', land: 'garm',
       skill: { name: '千本矢', type: 'multi', hits: 5, mult: 0.75, spread: true, cd: 3, desc: 'ランダムな敵に5回攻撃' }, line: '逃がさないよ！',
       look: { skin: '#f4dcc6', hair: '#e6e0a8', style: 'ponytail', eye: '#3a9a5a', top: 'leather', c1: '#3e7a44', c2: '#8a5a32', pants: '#2e4a30', boots: '#5a3a24', weapon: 'bow', gear: ['elfEars', 'headband'], build: 'slim', h: 0 },
       memories: ['風の向きで、獲物の居場所がわかる。森の中にいるみたいに。',
         '獣の大陸ガルムの大森林で、エルフの見張りをしていた。木の上が家だった。',
         '巨人たちが森を焼いた。魔獣たちは狂ったように暴れ、森の歌が聞こえなくなった。',
         '最後に聞いたのは、焼け落ちる世界樹のきしむ音。あの音を、二度と誰にも聞かせない。'] },
-    { id: 'mireille', name: 'ミレイユ', title: '白の聖女',   cls: 'priest',    rarity: 3, pers: 'caring', land: 'frosbel',
+    { id: 'mireille', name: 'ミレイユ', title: '白の聖女',   cls: 'priest',    rarity: 3, special: true, pers: 'caring', land: 'frosbel',
       skill: { name: '大いなる癒し', type: 'heal_all', mult: 1.7, cd: 3, desc: '味方全体を大きく回復' }, line: 'みんな、まだ戦えます！',
       look: { skin: '#fae4d4', hair: '#e2e6f2', style: 'long', eye: '#8a7ad8', top: 'dress', c1: '#f4f2ec', c2: '#d8b04a', pants: '#e8e2d4', boots: '#c8b890', weapon: 'staff', gem: '#ffe27a', gear: ['halo'], build: 'slim', h: 1 },
       memories: ['祈りの言葉を、ひとつ残らず覚えている。でも、誰に祈っていたのかは思い出せない。',
@@ -105,42 +105,42 @@
         '氷の魔女は、わたしの妹だった。人々を救えない自分を責めて、冬に心を明け渡してしまった。',
         'あの子を止められるのは、わたしの祈りだけ。……今度こそ、手を離さない。'] },
     // ★2
-    { id: 'baruk',    name: 'バルク',   title: '傭兵',       cls: 'warrior',   rarity: 2, pers: 'brave', land: 'necroa',
+    { id: 'baruk',    name: 'バルク',   title: '傭兵',       cls: 'warrior',   rarity: 2, special: true, pers: 'brave', land: 'necroa',
       skill: { name: '挑発', type: 'taunt', cd: 4, desc: '敵の攻撃を引きつけて守りを固める' }, line: 'こっちだ、かかってこい！',
       look: { skin: '#d8a07c', hair: '#c03a24', style: 'spiky', eye: '#5a3a1a', top: 'vest', c1: '#5e3e26', c2: '#2e2018', pants: '#3e3226', boots: '#2e2018', weapon: 'axe', gear: ['scar'], build: 'broad', h: -1 },
       memories: ['金のために戦っていた。……それだけだったはずだ。',
         '傭兵団の連中は、うるさくて、汚くて、最高の仲間だった。',
         '帝国が崩れたとき、雇い主は真っ先に逃げた。俺たちは金にならない撤退戦を引き受けた。',
         '団長は言った。「報酬は、誰かが明日を迎えることだ」。俺はまだ、その報酬を受け取りに行く途中だ。'] },
-    { id: 'kai',      name: 'カイ',     title: '双剣使い',   cls: 'thief',     rarity: 2, pers: 'whimsical', land: 'necroa',
+    { id: 'kai',      name: 'カイ',     title: '双剣使い',   cls: 'thief',     rarity: 2, special: true, pers: 'whimsical', land: 'necroa',
       skill: { name: '連撃', type: 'multi', hits: 3, mult: 0.85, cd: 3, desc: '敵1体に3回攻撃' }, line: '遅い遅い！',
       look: { skin: '#e8c4a6', hair: '#1e1e28', style: 'swept', eye: '#e03a3a', top: 'coat', c1: '#34364a', c2: '#a83a44', pants: '#24242e', boots: '#1a1a22', weapon: 'daggers', gear: ['hood', 'mask'], hat: '#44465c', mask: '#7a2a34', build: 'slim', h: 0 },
       memories: ['暗い路地の歩き方を知っている。音を立てない足の運びも。',
         '帝国の裏の部隊で、誰かの命令で誰かを消していた。名前の代わりに、番号で呼ばれていた。',
         '最後の命令は「竜を呼んだ司祭を殺せ」。間に合わなかった。',
         '司祭は笑っていた。「帝国は永遠になる。死者として」。……あの笑い声を、止めに行く。'] },
-    { id: 'nono',     name: 'ノノ',     title: '見習い魔導士', cls: 'mage',    rarity: 2, pers: 'careful', land: 'frosbel',
+    { id: 'nono',     name: 'ノノ',     title: '見習い魔導士', cls: 'mage',    rarity: 2, special: true, pers: 'careful', land: 'frosbel',
       skill: { name: '雷撃', type: 'aoe', mult: 1.1, cd: 3, desc: '敵全体にダメージ' }, line: 'え、えいっ！',
       look: { skin: '#fae0cc', hair: '#5a86d8', style: 'bob', eye: '#2a4aa8', top: 'robe', c1: '#34529c', c2: '#ecd060', pants: '#26386a', boots: '#26386a', weapon: 'staff', gem: '#9ad8ff', gear: ['wizardHat'], hat: '#2a4488', build: 'slim', h: 4 },
       memories: ['寒いのは苦手。なのに、雪の結晶の形を見ると胸がぎゅっとなる。',
         '魔法学院の一番の下っ端だった。先生の杖を磨くのが、わたしの仕事。',
         '雪がやまなくなって百日目、先生は「春を呼ぶ魔法」を完成させるために塔へ登った。',
         '先生の魔法は、氷の魔女に奪われた。……あの魔法の続きを書けるのは、わたしだけ。'] },
-    { id: 'jin',      name: 'ジン',     title: '狩人',       cls: 'archer',    rarity: 2, pers: 'loyal', land: 'garm',
+    { id: 'jin',      name: 'ジン',     title: '狩人',       cls: 'archer',    rarity: 2, special: true, pers: 'loyal', land: 'garm',
       skill: { name: '狙い撃ち', type: 'single', mult: 2.3, sure: true, cd: 3, desc: '敵1体に必ず会心の一撃' }, line: 'そこだ。',
       look: { skin: '#e2c2a4', hair: '#c4c8d4', style: 'swept', eye: '#6a8a5a', top: 'leather', c1: '#2e4430', c2: '#6a4a2e', pants: '#34342a', boots: '#3e2a1c', weapon: 'bow', gear: ['elfEars', 'cape'], cape: '#243a28', build: 'normal', h: -1 },
       memories: ['獲物は必要なぶんだけ狩る。それが掟だった気がする。',
         '群れからはぐれた狼の子を育てていた。名前はハイロ。',
         '大陸じゅうの獣が狂ったとき、ハイロも牙をむいた。俺は弓を下ろせなかった。',
         '獣を狂わせたのは、闘技場で育てられた双頭の怪物だった。……ハイロの仇は、あいつだ。'] },
-    { id: 'ema',      name: 'エマ',     title: '森の妖精',   cls: 'priest',    rarity: 2, pers: 'loyal', land: 'garm',
+    { id: 'ema',      name: 'エマ',     title: '森の妖精',   cls: 'priest',    rarity: 2, special: true, pers: 'loyal', land: 'garm',
       skill: { name: '癒しの風', type: 'heal_all', mult: 1.2, cd: 3, desc: '味方全体を回復' }, line: '風よ、みんなを癒して！',
       look: { skin: '#fce6d6', hair: '#f088b8', style: 'twin', eye: '#3aa87a', top: 'dress', c1: '#78c888', c2: '#f6f0a0', pants: '#5aa86a', boots: '#5aa86a', weapon: 'wand', gem: '#b8fff0', gear: ['wings'], build: 'slim', h: 4 },
       memories: ['花が咲く音が聞こえる。人には聞こえないなんて、知らなかった。',
         '世界樹の葉っぱの上で生まれた。仲間の妖精は、百人くらいいた。',
         '森が燃えた日、羽の小さい子たちから順に、煙にのまれていった。',
         '最後のひとりになったわたしを、誰かの手が門の中へ押し込んだ。……あれは、誰の手だったの？'] },
-    { id: 'roran',    name: 'ロラン',   title: '王子騎士',   cls: 'swordsman', rarity: 2, pers: 'caring', land: 'frosbel',
+    { id: 'roran',    name: 'ロラン',   title: '王子騎士',   cls: 'swordsman', rarity: 2, special: true, pers: 'caring', land: 'frosbel',
       skill: { name: '鼓舞の剣', type: 'single', mult: 1.8, partyAtk: true, cd: 4, desc: '敵1体を攻撃し、味方全員の攻撃を上げる' }, line: '皆、続け！',
       look: { skin: '#f4d4ba', hair: '#e6be50', style: 'short', eye: '#3a5ab0', top: 'coat', c1: '#2a52a8', c2: '#e6be50', pants: '#ece6d8', boots: '#4a2e20', weapon: 'sword', gear: ['circlet', 'cape'], cape: '#a82a34', build: 'normal', h: -1 },
       memories: ['人の前に立つと、自然と背筋が伸びる。誰に教わったのだろう。',
@@ -148,42 +148,42 @@
         '兄上は民を逃がすために、凍った城に一人で残った。私は逃げる側だった。',
         '王冠は兄上のものだ。私はただ、兄上が守ろうとした人々の前に立ち続ける。'] },
     // ★1
-    { id: 'tom',      name: 'トム',     title: '村の若者',   cls: 'swordsman', rarity: 1, pers: 'brave', land: 'elde',
+    { id: 'tom',      name: 'トム',     title: '村の若者',   cls: 'swordsman', rarity: 1, special: true, pers: 'brave', land: 'elde',
       skill: { name: '力いっぱい斬り', type: 'single', mult: 2.0, cd: 3, desc: '敵1体に大きめのダメージ' }, line: 'うおおお！',
       look: { skin: '#eec09a', hair: '#7e5230', style: 'messy', eye: '#5a3a1a', top: 'tunic', c1: '#c4a274', c2: '#6a4a2c', pants: '#54463a', boots: '#46301e', weapon: 'sword', gear: [], build: 'normal', h: 0 },
       memories: ['麦畑の匂いを覚えている。毎朝、誰かと剣のまねごとをしていた。',
         '幼なじみがいた。「騎士になったら、この村を守ってね」と笑っていた。',
         '空が緑色ににごった日、ゴブリンの群れが丘を越えてきた。俺は棒きれ一本で立っていた。',
         '守れなかった。だから今度こそ、あの丘の向こうまで剣を届かせる。'] },
-    { id: 'dolf',     name: 'ドルフ',   title: '農夫',       cls: 'warrior',   rarity: 1, pers: 'loyal', land: 'elde',
+    { id: 'dolf',     name: 'ドルフ',   title: '農夫',       cls: 'warrior',   rarity: 1, special: true, pers: 'loyal', land: 'elde',
       skill: { name: '踏ん張り', type: 'taunt', cd: 4, desc: '敵の攻撃を引きつけて守りを固める' }, line: 'ここは通さねえ！',
       look: { skin: '#d49c74', hair: '#76563a', style: 'short', eye: '#3a2a1a', top: 'overalls', c1: '#46669c', c2: '#e0d2b0', pants: '#46669c', boots: '#523622', weapon: 'fork', gear: ['strawHat', 'beard'], beard: '#76563a', build: 'broad', h: 0 },
       memories: ['土を耕す手の感触だけは、忘れていない。',
         '女房と娘がいた。収穫祭の夜、三人で焼いた芋がうまかった。',
         '王国の騎士たちは先に逃げた。残ったのは、鍬を持った俺たち農夫だけだった。',
         '最後まで畑の前に立っていた。……あの子たちが逃げる時間は、稼げたんだろうか。'] },
-    { id: 'yuna',     name: 'ユナ',     title: '薬師',       cls: 'priest',    rarity: 1, pers: 'careful', land: 'elde',
+    { id: 'yuna',     name: 'ユナ',     title: '薬師',       cls: 'priest',    rarity: 1, special: true, pers: 'careful', land: 'elde',
       skill: { name: '薬草の雨', type: 'heal_all', mult: 1.0, cd: 4, desc: '味方全体を少し回復' }, line: 'お薬の時間です！',
       look: { skin: '#f4d0b4', hair: '#663822', style: 'ponytail', eye: '#5a3a22', top: 'dress', c1: '#5e8e50', c2: '#f0e8d4', pants: '#46663a', boots: '#46301e', weapon: 'staff', gem: '#9be07a', gear: ['satchel'], build: 'slim', h: 2 },
       memories: ['薬草の名前は、なぜか全部すらすら出てくる。',
         '師匠のおばあさんに「薬は人を待ってくれない」と、よく叱られていた。',
         '病に倒れた人であふれた教会で、薬が尽きるまで走り回った。',
         '最後の一瓶を、知らない兵士に渡した。あの人は、生き延びられたのかな。'] },
-    { id: 'pico',     name: 'ピコ',     title: '弓の練習生', cls: 'archer',    rarity: 1, pers: 'whimsical', land: 'elde',
+    { id: 'pico',     name: 'ピコ',     title: '弓の練習生', cls: 'archer',    rarity: 1, special: true, pers: 'whimsical', land: 'elde',
       skill: { name: '二連射', type: 'multi', hits: 2, mult: 1.0, cd: 3, desc: '敵1体に2回攻撃' }, line: '当たれー！',
       look: { skin: '#f6d6be', hair: '#ee8838', style: 'twin', eye: '#6a4a22', top: 'tunic', c1: '#d4ac6c', c2: '#8a5a30', pants: '#76582e', boots: '#583a22', weapon: 'bow', gear: [], build: 'slim', h: 3 },
       memories: ['的の真ん中に当てると、誰かが頭をなでてくれた気がする。',
         '兄さんは王国一の弓使いだった。わたしはいつも、追いかけてばかり。',
         '兄さんは城壁の上から矢を射ち続けて、そのまま帰ってこなかった。',
         '兄さんの弓、ずっと重くて引けなかった。今なら、引けるよ。'] },
-    { id: 'nez',      name: 'ネズ',     title: 'すばしっこい盗賊', cls: 'thief', rarity: 1, pers: 'careful', land: 'garm',
+    { id: 'nez',      name: 'ネズ',     title: 'すばしっこい盗賊', cls: 'thief', rarity: 1, special: true, pers: 'careful', land: 'garm',
       skill: { name: '急所突き', type: 'single', mult: 1.8, sure: true, cd: 3, desc: '敵1体に必ず会心の一撃' }, line: 'チュッ、もらった！',
       look: { skin: '#f0d2be', hair: '#9898a6', style: 'messy', eye: '#2a2a2a', top: 'leather', c1: '#76563a', c2: '#c49c5e', pants: '#563e2e', boots: '#3a2a1e', weapon: 'daggers', gear: ['mouseEars', 'scarf'], scarf: '#b03a3a', build: 'slim', h: 3 },
       memories: ['鍵穴を見ると、指がむずむずする。',
         'ネズミの耳の一族は、大陸の地下に町を作って暮らしていた。',
         '地上が魔獣だらけになって、地下の町へ逃げてくる人たちを、こっそり助けていた。',
         '町の入口を最後に閉めたのは、おいらだ。外に残った仲間の声が、まだ耳に残ってる。'] },
-    { id: 'maro',     name: 'マロ',     title: '占い師',     cls: 'mage',      rarity: 1, pers: 'loyal', land: 'nox',
+    { id: 'maro',     name: 'マロ',     title: '占い師',     cls: 'mage',      rarity: 1, special: true, pers: 'loyal', land: 'nox',
       skill: { name: '星くず', type: 'aoe', mult: 0.9, cd: 3, desc: '敵全体に少しダメージ' }, line: '星よ、降り注げ…',
       look: { skin: '#e4bc9c', hair: '#e6e6ee', style: 'bald', eye: '#4a3a6a', top: 'robe', c1: '#62468a', c2: '#dcbc5c', pants: '#46366a', boots: '#382848', weapon: 'orb', gem: '#c8a8ff', gear: ['wizardHat', 'longBeard'], hat: '#46286a', beard: '#ececf4', build: 'normal', h: 1 },
       memories: ['星の並びを見ると、明日のことが少しだけわかる。',
@@ -428,11 +428,11 @@
 
   // ---------- 待機所の施設 ----------
   const BUILDINGS = {
-    gate:     { name: '次元の門', icon: '🌀', start: 1, desc: '英雄を呼ぶ門。塔への入口。★3 が出やすくなる' },
-    dorm:     { name: '宿舎',     icon: '🛏️', start: 1, desc: '暮らせる英雄が増える' },
-    plaza:    { name: '広場',     icon: '⛲', start: 0, desc: '英雄が集まる。提案が出やすくなる' },
-    training: { name: '訓練所',   icon: '🎯', start: 0, desc: '編成に入っていない英雄も経験値をもらえる' },
-    strategy: { name: '戦略室',   icon: '🗺️', start: 0, desc: '細かい作戦が使え、命令を出しやすくなる' },
+    gate:     { name: '次元の門', icon: '🌀', start: 1, desc: '塔への入口。英雄を呼ぶ門。★3 が出やすくなる' },
+    dorm:     { name: '宿舎',     icon: '🛏️', start: 1, desc: '暮らせる英雄が増える。英雄の一覧' },
+    plaza:    { name: '広場',     icon: '⛲', start: 1, desc: '英雄が集まって過ごす。仲が深まり、提案が出やすくなる' },
+    training: { name: '訓練所',   icon: '🎯', start: 1, desc: '訓練した英雄の能力が上がる（才能がないと上がらない）' },
+    strategy: { name: '戦略室',   icon: '🗺️', start: 0, desc: '編成と作戦。細かい作戦が使え、命令を出しやすくなる' },
     fusion:   { name: '合成所',   icon: '⚗️', start: 0, desc: '送り出す英雄の特性を受け継がせる。費用が下がる' },
     armory:   { name: '武器倉庫', icon: '⚔️', start: 0, desc: '装備を作る。良い装備を作れるようになる' },
     alchemy:  { name: '錬金場',   icon: '🧪', start: 0, desc: '薬を作る。持っていける数が増える' },
@@ -441,7 +441,7 @@
   const BUILDING_MAX = 5;
   const BUILD_COST = { 1: 300, 2: 800, 3: 2000, 4: 4500, 5: 9000 };  // そのレベルにするのに必要な金貨
   const BUILD_REQ = { 1: 0, 2: 10, 3: 25, 4: 50, 5: 75 };            // そのレベルにするのに必要なクリア階数
-  const DORM_CAP = [0, 8, 11, 14, 17, 20];
+  const DORM_CAP = [0, 12, 15, 18, 21, 24];
   const TRAINING_SHARE = [0, 0.2, 0.35, 0.5, 0.65, 0.8];
   const GATE_RATE3 = [0, 0.05, 0.06, 0.07, 0.08, 0.09];
   const PLAZA_CHANCE = [0.3, 0.45, 0.55, 0.65, 0.75, 0.85];       // 戦闘のあとに提案が出る確率
@@ -470,11 +470,61 @@
     heal:    { name: '回復薬', icon: '🧪', cures: null,    cost: 150, lv: 3, desc: 'HP が 30% を切ったら 40% 回復' },
   };
 
+  // ---------- 第5版: 才能・訓練・仲・時間 ----------
+  // 能力ごとの才能（0 なし / 1 C / 2 B / 3 A / 4 S）。訓練と戦闘で伸びる量と、伸びる上限が決まる
+  const STAT_KEYS = ['hp', 'atk', 'def', 'spd'];
+  const STAT_NAMES = { hp: '体力', atk: '攻撃', def: '防御', spd: '速さ' };
+  const TALENT_NAMES = ['—', 'C', 'B', 'A', 'S'];
+  const TALENT_MULT = [0, 0.5, 1, 1.5, 2];
+  const TALENT_CAP = [0, 0.12, 0.22, 0.36, 0.5];      // 訓練と戦闘で伸ばせる上限（基本の能力に対する割合。★で増える）
+  const TALENT_TOTAL = { 1: 3, 2: 5, 3: 7 };           // 生まれのレア度ごとの才能の合計
+  // 待機室の時間（現実の時間で進む）
+  const TICK_MS = 60 * 1000;                           // 1回の「待機室の時間」= 現実の1分
+  const OFFLINE_MAX_TICKS = 240;                       // 閉じていた間に進むのは最大4時間ぶん
+  const TRAIN_GAIN = 0.0035;                           // 1回の訓練で伸びる割合（才能 B・訓練所 Lv1 のとき）
+  const INJURY_TICKS = 20;                             // けがが治るまで（分）
+  // 仲（-100〜100）
+  const REL_COMPAT = {                                 // 性格の相性（はじめの仲に足す）
+    loyal: { loyal: 10, brave: 0, careful: 5, whimsical: -8, caring: 8 },
+    brave: { loyal: 0, brave: 6, careful: -12, whimsical: -4, caring: 2 },
+    careful: { loyal: 5, brave: -12, careful: 8, whimsical: -10, caring: 6 },
+    whimsical: { loyal: -8, brave: -4, careful: -10, whimsical: 4, caring: 2 },
+    caring: { loyal: 8, brave: 2, careful: 6, whimsical: 2, caring: 10 },
+  };
+  const QUARREL = {
+    line: -20,          // 仲がこれより悪いと喧嘩が起きる
+    chance: 0.06,       // 1分ごとの、同じ場所にいる仲の悪い二人の喧嘩の起きやすさ（仲 -50 のとき）
+    timeoutMs: 90000,   // 仲裁しないまま、これだけたつと喧嘩がひどくなる
+    murderLine: -70,    // これより仲が悪いと、殺し合いになることがある
+    murderChance: 0.35,
+    betrayLine: -70,    // 塔の中で裏切りが起きる仲
+  };
+
+  // 塔の任務（最初は不明。NPC や石碑から聞くと判明する）
+  const MISSIONS = {
+    hunt:    { name: '討伐', desc: '魔物の巣をすべて潰せ' },
+    relic:   { name: '回収', desc: '散らばった遺物を3つ集めよ' },
+    escort:  { name: '護衛', desc: '取り残された生存者を出口まで連れて行け' },
+    explore: { name: '探索', desc: '隠された出口を見つけ出せ' },
+    survive: { name: '生存', desc: '押し寄せる魔物から90秒耐え抜け' },
+    boss:    { name: '主の討伐', desc: 'この階の主を倒せ' },
+  };
+  const NPCS = [
+    { name: '生き残りの兵士', kind: 'npc' }, { name: '迷子の子ども', kind: 'npc' }, { name: '旅の商人', kind: 'npc' },
+    { name: '亡霊の騎士', kind: 'npc' }, { name: '年老いた巡礼者', kind: 'npc' }, { name: '石碑', kind: 'stele' },
+  ];
+
+  // 待機室（滅んだ世界）の名前: カタカナ5文字ほど
+  const WORLD_HEADS = ['ニブル', 'ヴァル', 'アス', 'ミズ', 'エル', 'グラ', 'ノル', 'ザル', 'セフィ', 'リュ', 'カル', 'オル', 'ティア', 'ルミ', 'ゼノ', 'アル', 'イス', 'ヘル'];
+  const WORLD_TAILS = ['ヘイム', 'ガルド', 'ディア', 'ローグ', 'ネリア', 'ドール', 'ゼリア', 'フェン', 'リオン', 'トリス', 'グラム', 'ヴェイン', 'ナリス', 'メリア'];
+
   // ---------- 戦闘中の命令 ----------
   const ORDERS = {
     target: { name: '狙え', icon: '⚔️' },
     skill:  { name: 'スキル', icon: '✦' },
     guard:  { name: '守れ', icon: '🛡️' },
+    move:   { name: 'ここへ', icon: '📍' },
+    flee:   { name: '逃げろ', icon: '💨' },
   };
 
   const data = {
@@ -483,6 +533,8 @@
     ZONES, FLOORS_PER_ZONE, WORLD_NAME, LANDS, STATUS, ACTIONS, PROPOSALS, BATTLE_PROPOSALS,
     DIFFICULTIES, BUILDINGS, BUILDING_ORDER, BUILDING_MAX, BUILD_COST, BUILD_REQ, DORM_CAP, TRAINING_SHARE, GATE_RATE3,
     PLAZA_CHANCE, PLAZA_MAX, FUSION_COST, POTION_CAP, TACTIC_UNLOCK, CMD_COST, BASE_NAMES, EQUIP_TIERS, EQUIP_KINDS, POTIONS, ORDERS,
+    STAT_KEYS, STAT_NAMES, TALENT_NAMES, TALENT_MULT, TALENT_CAP, TALENT_TOTAL, TICK_MS, OFFLINE_MAX_TICKS, TRAIN_GAIN, INJURY_TICKS,
+    REL_COMPAT, QUARREL, MISSIONS, NPCS, WORLD_HEADS, WORLD_TAILS,
     zoneOfFloor: (fi) => ZONES[Math.floor(fi / FLOORS_PER_ZONE)],
     heroById: Object.fromEntries(HEROES.map(h => [h.id, h])),
   };

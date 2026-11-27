@@ -4,9 +4,10 @@
   const isNode = typeof module !== 'undefined' && module.exports;
   const D = isNode ? require('./data.js') : root.GameData;
   const E = isNode ? require('./battle.js') : root.BattleEngine;
+  const HG = isNode ? require('./herogen.js') : root.HeroGen;
 
   const SAVE_KEY = 'seikan-tower-save-v1';
-  const VERSION = 4;
+  const VERSION = 5;
 
   function expToNext(lv) { return 30 + 25 * (lv - 1); }
   const isBossFloor = (fi) => (fi + 1) % D.FLOORS_PER_ZONE === 0;
@@ -28,7 +29,8 @@
     const def = D.heroById[id];
     const traits = [];
     for (let i = 0; i < traitSlots(def.rarity); i++) traits.push({ id: randomTrait(rng, traits.map(t => t.id)), lv: 1 });
-    return { lv: 1, exp: 0, star: def.rarity, trust: D.PERSONALITIES[def.pers].trust, traits, equip: { weapon: 0, armor: 0 } };
+    return { lv: 1, exp: 0, star: def.rarity, trust: D.PERSONALITIES[def.pers].trust, traits, equip: { weapon: 0, armor: 0 },
+      bonus: { hp: 0, atk: 0, def: 0, spd: 0 }, injured: 0, activity: 'wander', joined: Date.now() };
   }
 
   function rollDifficulty(rng) {
@@ -38,11 +40,11 @@
     for (const [k, d] of list) { r -= d.weight; if (r < 0) return k; }
     return 'normal';
   }
-  function randomBaseName(rng) {
-    rng = rng || Math.random;
-    const no = 100 + Math.floor(rng() * 9900);
-    return '第' + no + '待機所「' + D.BASE_NAMES[Math.floor(rng() * D.BASE_NAMES.length)] + '」';
-  }
+  function randomBaseName(rng) { return HG.worldName(rng); }
+  const relKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+  /** 英雄の定義を登録する（自動で作った英雄も D.heroById から引けるようにする） */
+  function registerDef(def) { D.heroById[def.id] = def; if (!def.talents) def.talents = HG.talentsFor(def); return def; }
+  for (const h of D.HEROES) registerDef(h);
   function startBuildings() {
     const b = {};
     for (const k of D.BUILDING_ORDER) b[k] = D.BUILDINGS[k].start;
@@ -51,17 +53,27 @@
 
   function newState() {
     const heroes = {};
-    for (const id of D.STARTER_HEROES) {
-      heroes[id] = newOwned(id);
-      heroes[id].trust += 10;                       // 最初からいる仲間は少しだけ信頼している
-    }
+    const heroDefs = {};
+    const usedNames = D.HEROES.map(h => h.name);
+    const used = new Set(usedNames);
+    const starters = [];
+    ['warrior', 'priest', 'swordsman'].forEach((cls, i) => {
+      const def = registerDef(HG.generate(Math.random, 1, used, i + 1, cls));
+      used.add(def.name); usedNames.push(def.name);
+      heroDefs[def.id] = def;
+      heroes[def.id] = newOwned(def.id);
+      heroes[def.id].trust += 10;                  // 最初からいる仲間は少しだけ信頼している
+      starters.push(def.id);
+    });
+    const rel = {};
+    for (let i = 0; i < starters.length; i++) for (let j = i + 1; j < starters.length; j++) rel[relKey(starters[i], starters[j])] = 15;
     return {
       v: VERSION,
       gems: D.START_GEMS,
       gold: D.START_GOLD,
       shards: 0,
       heroes,
-      party: D.STARTER_HEROES.concat([null, null]).slice(0, D.PARTY_SIZE),
+      party: starters.concat([null, null]).slice(0, D.PARTY_SIZE),
       rows: {},
       tactics: Object.assign({}, D.DEFAULT_TACTICS),
       cleared: 0,
@@ -79,14 +91,34 @@
       potions: { styptic: 0, calm: 0, heal: 0 },    // 錬金場で作った薬
       nextUid: 1,
       worldSaved: false,
+      // 第5版
+      heroDefs,                                     // 自動で作った英雄の定義（id → 定義）
+      usedNames,                                    // 一度でも出た名前（同じ英雄は二度と出ない）
+      everSummoned: [],                             // 一度でも出た特別な英雄
+      serial: 4,
+      rel,                                          // 英雄どうしの仲（"a|b" → -100〜100）
+      quarrels: [],                                 // 喧嘩 [{ id, a, b, at }]
+      clock: { last: Date.now(), ticks: 0 },        // 待機室の時間
+      log: [],                                      // 待機室で起きたこと
+      seed: 1 + Math.floor(Math.random() * 99999),  // 塔のマップの種
     };
   }
 
   function int(v, d) { const n = Math.floor(Number(v)); return Number.isFinite(n) ? n : d; }
+  function initialRel(a, b, rng) {
+    const da = D.heroById[a], db = D.heroById[b];
+    const base = (D.REL_COMPAT[da.pers] || {})[db.pers] || 0;
+    return Math.round(base + (rng() - 0.5) * 30 + (da.land && da.land === db.land ? 10 : 0));
+  }
 
   function sanitizeOwned(id, h, version) {
     const def = D.heroById[id];
     const out = newOwned(id);
+    const b = (h.bonus && typeof h.bonus === 'object') ? h.bonus : {};
+    for (const k of D.STAT_KEYS) out.bonus[k] = Math.max(0, Math.min(1, Number(b[k]) || 0));
+    out.injured = Math.max(0, int(h.injured, 0));
+    out.activity = typeof h.activity === 'string' ? h.activity : 'wander';
+    out.joined = int(h.joined, Date.now());
     out.star = Math.min(D.MAX_STAR, Math.max(def.rarity, int(h.star, def.rarity)));
     out.lv = Math.min(D.STARS[out.star].maxLv, Math.max(1, int(h.lv, 1)));
     out.exp = Math.max(0, int(h.exp, 0));
@@ -112,9 +144,15 @@
   /** 保存データを確かめて整える（前の版のデータもここで引き継ぐ） */
   function sanitize(s) {
     const base = newState();
-    if (!s || typeof s !== 'object' || ![1, 2, 3, 4].includes(s.v)) return base;
+    if (!s || typeof s !== 'object' || ![1, 2, 3, 4, 5].includes(s.v)) return base;
     const version = s.v;
+    // 自動で作った英雄の定義を先に登録する
+    const defs = {};
+    for (const [id, def] of Object.entries((s.heroDefs && typeof s.heroDefs === 'object') ? s.heroDefs : {})) {
+      if (def && def.id === id && D.CLASSES[def.cls] && def.look && def.name) defs[id] = registerDef(def);
+    }
     const out = Object.assign(base, s, { v: VERSION });
+    out.heroDefs = defs;
     out.tactics = Object.assign({}, D.DEFAULT_TACTICS, s.tactics || {});
     out.heroes = {};
     let shards = Math.max(0, int(s.shards, 0));
@@ -168,6 +206,34 @@
     for (const k of Object.keys(D.POTIONS)) out.potions[k] = Math.max(0, Math.min(20, int(sp[k], 0)));
     out.proposals = Array.isArray(s.proposals) ? s.proposals.filter(p => p && out.heroes[p.heroId] && D.PROPOSALS[p.kind]).slice(0, 5) : [];
     out.worldSaved = !!s.worldSaved || out.cleared >= D.FLOORS.length;
+    // 第5版: 一度だけの英雄・仲・喧嘩・待機室の時間
+    const names = new Set(Array.isArray(s.usedNames) ? s.usedNames.filter(n => typeof n === 'string') : []);
+    for (const h of D.HEROES) names.add(h.name);
+    for (const d of Object.values(defs)) names.add(d.name);
+    out.usedNames = [...names];
+    const ever = new Set(Array.isArray(s.everSummoned) ? s.everSummoned : []);
+    for (const id of Object.keys(out.heroes)) if (!defs[id]) ever.add(id);
+    for (const f of out.fallen) if (!defs[f.id]) ever.add(f.id);
+    out.everSummoned = [...ever].filter(id => D.heroById[id] && !D.heroById[id].generated);
+    out.serial = Math.max(int(s.serial, 1), ...Object.keys(defs).map(id => int(id.slice(1), 0) + 1), 1);
+    out.rel = {};
+    const ids = Object.keys(out.heroes);
+    const srel = (s.rel && typeof s.rel === 'object') ? s.rel : {};
+    // 保存されていた仲を、保存されていた順のまま戻す。足りない組み合わせは新しく決める
+    for (const [k, v] of Object.entries(srel)) { const [a, b] = k.split('|'); if (out.heroes[a] && out.heroes[b] && Number.isFinite(v) && k === relKey(a, b)) out.rel[k] = Math.max(-100, Math.min(100, v)); }
+    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+      const k = relKey(ids[i], ids[j]);
+      if (!(k in out.rel)) out.rel[k] = initialRel(ids[i], ids[j], Math.random);
+    }
+    out.quarrels = Array.isArray(s.quarrels) ? s.quarrels.filter(q => q && out.heroes[q.a] && out.heroes[q.b]).slice(0, 3) : [];
+    const c = (s.clock && typeof s.clock === 'object') ? s.clock : {};
+    out.clock = { last: int(c.last, Date.now()), ticks: Math.max(0, int(c.ticks, 0)) };
+    out.log = Array.isArray(s.log) ? s.log.slice(-40) : [];
+    out.seed = int(s.seed, 1 + Math.floor(Math.random() * 99999));
+    if (version < 5) {
+      if (typeof s.base === 'object' && /待機所/.test(String(s.base && s.base.name))) out.base.name = randomBaseName();
+      for (const k of ['plaza', 'training']) out.base.buildings[k] = Math.max(1, out.base.buildings[k]);
+    }
     // 戦略室でまだ使えない作戦は、ふつうの作戦にそろえる
     for (const key of Object.keys(D.TACTICS)) {
       if (D.TACTIC_UNLOCK[key] > out.base.buildings.strategy) out.tactics[key] = D.DEFAULT_TACTICS[key];
@@ -197,6 +263,165 @@
     },
 
     reset() { this.state = newState(); this.save(); },
+
+    // ---------- 英雄の定義 ----------
+    talents(id) { return D.heroById[id].talents || HG.talentsFor(D.heroById[id]); },
+    /** 訓練と戦闘で伸ばせる上限（★が上がると増える） */
+    bonusCap(id, stat) { const t = this.talents(id)[stat]; return D.TALENT_CAP[t] * (1 + 0.25 * (this.owned(id).star - 1)); },
+    addBonus(id, stat, amount) {
+      const h = this.owned(id);
+      if (!h || amount <= 0) return 0;
+      const cap = this.bonusCap(id, stat);
+      const before = h.bonus[stat] || 0;
+      h.bonus[stat] = Math.min(cap, before + amount);
+      return h.bonus[stat] - before;
+    },
+    isInjured(id) { const h = this.owned(id); return !!h && h.injured > 0; },
+
+    // ---------- 仲 ----------
+    rel(a, b) { if (a === b) return 100; const v = this.state.rel[relKey(a, b)]; return v == null ? 0 : v; },
+    addRel(a, b, d) { if (a === b || !this.owned(a) || !this.owned(b)) return; const k = relKey(a, b); this.state.rel[k] = Math.max(-100, Math.min(100, Math.round((this.state.rel[k] || 0) + d))); },
+    /** 仲の悪い組み合わせ（悪い順） */
+    badPairs() {
+      const out = [];
+      for (const [k, v] of Object.entries(this.state.rel)) { const [a, b] = k.split('|'); if (this.owned(a) && this.owned(b) && v < D.QUARREL.line) out.push({ a, b, rel: v }); }
+      return out.sort((x, y) => x.rel - y.rel);
+    },
+    addLog(text, kind) { this.state.log.push({ t: Date.now(), text, kind: kind || 'info' }); if (this.state.log.length > 40) this.state.log.shift(); },
+
+    // ---------- 待機室の時間（現実の時間で進む） ----------
+    /**
+     * 現実の時間に合わせて待機室を進める。now は今の時刻（ミリ秒）。
+     * online=false（起動したとき）は、閉じていた間の分をまとめて進める（最大 4 時間）。
+     * 戻り値: その間に起きたことのまとめ
+     */
+    advance(now, online) {
+      const s = this.state;
+      now = now || Date.now();
+      let ticks = Math.floor((now - s.clock.last) / D.TICK_MS);
+      if (ticks <= 0) return null;
+      const capped = ticks > D.OFFLINE_MAX_TICKS;
+      ticks = Math.min(ticks, D.OFFLINE_MAX_TICKS);
+      const sum = { ticks, gains: {}, quarrels: 0, proposals: 0, healed: [], noTalent: {} };
+      for (let i = 0; i < ticks; i++) this.tick(sum, online);
+      s.clock.last = capped ? now : s.clock.last + ticks * D.TICK_MS;
+      s.clock.ticks += ticks;
+      // 閉じていた間の喧嘩は、マスターが戻ってきてから時間を数えはじめる
+      for (const q of s.quarrels) if (!q.at) q.at = now;
+      this.save();
+      return sum;
+    },
+
+    /** 待機室の時間を1つ（1分）進める */
+    tick(sum, online) {
+      const s = this.state;
+      const ids = Object.keys(s.heroes);
+      const trainLv = this.buildingLv('training');
+      const places = {};
+      for (const id of ids) {
+        const h = s.heroes[id];
+        const def = D.heroById[id];
+        if (h.injured > 0) { h.injured--; h.activity = 'rest'; if (h.injured === 0) sum.healed.push(id); continue; }
+        // 何をするかは性格で決まる（勝手に訓練して強くなる）
+        const w = { brave: [5, 2, 1, 2], careful: [4, 2, 3, 1], loyal: [4, 3, 2, 1], whimsical: [2, 3, 2, 3], caring: [3, 4, 2, 1] }[def.pers];
+        const keys = ['train', 'social', 'rest', 'wander'];
+        if (trainLv <= 0) w[0] = 0;
+        let x = this.rng() * w.reduce((a, b) => a + b, 0), act = 'wander';
+        for (let k = 0; k < 4; k++) { x -= w[k]; if (x < 0) { act = keys[k]; break; } }
+        h.activity = act;
+        const place = act === 'train' ? 'training' : act === 'social' ? 'plaza' : act === 'rest' ? 'dorm' : 'yard';
+        (places[place] = places[place] || []).push(id);
+        if (act === 'train') {
+          const tal = this.talents(id);
+          const stat = D.STAT_KEYS[Math.floor(this.rng() * 4)];
+          const mult = D.TALENT_MULT[tal[stat]];
+          if (mult <= 0) { sum.noTalent[id] = (sum.noTalent[id] || 0) + 1; continue; }   // 才能がない能力は伸びない
+          const g = this.addBonus(id, stat, D.TRAIN_GAIN * mult * (1 + 0.2 * (trainLv - 1)));
+          if (g > 0) { sum.gains[id] = sum.gains[id] || {}; sum.gains[id][stat] = (sum.gains[id][stat] || 0) + g; }
+        }
+      }
+      // 同じ場所にいる英雄どうしの仲が変わる。仲が悪いと喧嘩になる
+      const plazaLv = this.buildingLv('plaza');
+      for (const [place, list] of Object.entries(places)) {
+        if (list.length < 2) continue;
+        for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+          const a = list[i], b = list[j];
+          const compat = (D.REL_COMPAT[D.heroById[a].pers] || {})[D.heroById[b].pers] || 0;
+          if (place === 'plaza' || place === 'dorm') this.addRel(a, b, (compat >= 0 ? 1 : -1) * (this.rng() < 0.6 ? 1 : 0) + (place === 'plaza' ? plazaLv * 0.3 : 0));
+          const r = this.rel(a, b);
+          if (r < D.QUARREL.line && (place === 'plaza' || place === 'dorm' || place === 'yard') && s.quarrels.length < 2 &&
+              !s.quarrels.some(q => q.a === a || q.b === a || q.a === b || q.b === b) && this.rng() < D.QUARREL.chance * (-r / 50)) {
+            s.quarrels.push({ id: s.nextUid++, a, b, at: online ? Date.now() : null, place });
+            sum.quarrels++;
+            this.addLog(`${D.heroById[a].name}と${D.heroById[b].name}が喧嘩を始めた`, 'quarrel');
+          }
+        }
+      }
+      // 広場で提案が生まれることがある
+      if (this.rng() < 0.02 * plazaLv && this.maybePropose(true)) sum.proposals++;
+    },
+
+    /** 喧嘩を仲裁しないまま時間がたつと、ひどくなる（殺し合いになることもある） */
+    updateQuarrels(now, online) {
+      if (!online) return [];
+      const s = this.state;
+      const out = [];
+      for (const q of s.quarrels.slice()) {
+        if (!q.at || now - q.at < D.QUARREL.timeoutMs) continue;
+        out.push(this.escalate(q));
+      }
+      return out;
+    },
+    escalate(q) {
+      const s = this.state;
+      s.quarrels = s.quarrels.filter(x => x.id !== q.id);
+      const A = D.heroById[q.a], B = D.heroById[q.b];
+      this.addRel(q.a, q.b, -12);
+      const r = this.rel(q.a, q.b);
+      const pa = this.power(q.a), pb = this.power(q.b);
+      const loser = this.rng() < pb / (pa + pb) ? q.a : q.b;
+      const winner = loser === q.a ? q.b : q.a;
+      if (r <= D.QUARREL.murderLine && this.rng() < D.QUARREL.murderChance) {
+        const h = s.heroes[loser];
+        s.fallen.push({ id: loser, name: D.heroById[loser].name, star: h.star, lv: h.lv, floor: 0, battle: s.stats.battles, cause: 'murder', by: D.heroById[winner].name });
+        this.removeHero(loser);
+        s.stats.lost++;
+        for (const id of Object.keys(s.heroes)) { s.heroes[id].trust = clampTrust(s.heroes[id].trust - 8); if (id !== winner) this.addRel(id, winner, -25); }
+        const text = `${D.heroById[winner].name}が${D.heroById[loser].name}を殺した`;
+        this.addLog(text, 'murder');
+        this.save();
+        return { kind: 'murder', killer: winner, victim: loser, text };
+      }
+      s.heroes[loser].injured = D.INJURY_TICKS;
+      for (const id of [q.a, q.b]) if (s.heroes[id]) s.heroes[id].trust = clampTrust(s.heroes[id].trust - 3);
+      const text = `${A.name}と${B.name}の喧嘩がひどくなり、${D.heroById[loser].name}がけがをした`;
+      this.addLog(text, 'injury');
+      this.save();
+      return { kind: 'injury', a: q.a, b: q.b, loser, text };
+    },
+    /** 仲裁する。side: 'a'（a の味方）/ 'b' / 'both'（両方を叱る） */
+    mediate(qid, side) {
+      const s = this.state;
+      const q = s.quarrels.find(x => x.id === qid);
+      if (!q) return { ok: false };
+      s.quarrels = s.quarrels.filter(x => x.id !== qid);
+      const ha = s.heroes[q.a], hb = s.heroes[q.b];
+      let text;
+      if (side === 'both') {
+        ha.trust = clampTrust(ha.trust - 2); hb.trust = clampTrust(hb.trust - 2);
+        this.addRel(q.a, q.b, 14);
+        text = `二人を叱った。${D.heroById[q.a].name}と${D.heroById[q.b].name}はしぶしぶ仲直りした`;
+      } else {
+        const win = side === 'a' ? q.a : q.b, lose = side === 'a' ? q.b : q.a;
+        s.heroes[win].trust = clampTrust(s.heroes[win].trust + 5);
+        s.heroes[lose].trust = clampTrust(s.heroes[lose].trust - 6);
+        this.addRel(q.a, q.b, 6);
+        text = `${D.heroById[win].name}の味方をした。${D.heroById[lose].name}は不満そうだ`;
+      }
+      this.addLog(text, 'mediate');
+      this.save();
+      return { ok: true, text };
+    },
 
     // ---------- 待機所の施設 ----------
     buildingLv(k) { return this.state.base.buildings[k] || 0; },
@@ -251,7 +476,7 @@
     },
 
     /** 戦闘に渡す設定（難易度・命令ゲージ） */
-    battleOptions() { return { enemyMult: this.difficulty().enemy, cmdCost: this.cmdCost(), potions: Object.assign({}, this.state.potions) }; },
+    battleOptions() { return { enemyMult: this.difficulty().enemy, cmdCost: this.cmdCost(), potions: Object.assign({}, this.state.potions), rels: (a, b) => this.rel(a, b), seed: this.state.seed }; },
 
     // ---------- 装備（武器倉庫） ----------
     maxForgeTier() { return this.buildingLv('armory'); },
@@ -404,7 +629,7 @@
       });
     },
 
-    partyIds() { return this.state.party.filter(Boolean); },
+    partyIds() { return this.state.party.filter(id => id && !this.isInjured(id)); },
 
     partyForBattle() {
       const perHero = this.tacticUnlocked('perHero');
@@ -571,6 +796,8 @@
       delete s.rows[id];
       delete s.heroTactics[id];
       s.proposals = s.proposals.filter(p => p.heroId !== id);
+      s.quarrels = s.quarrels.filter(q => q.a !== id && q.b !== id);
+      for (const k of Object.keys(s.rel)) if (k.split('|').includes(id)) delete s.rel[k];
       s.party = s.party.map(x => (x === id ? null : x));
     },
 
@@ -578,12 +805,10 @@
     ensureSomeone() {
       const s = this.state;
       if (Object.keys(s.heroes).length > 0 || s.gems >= D.GACHA.cost1) return null;
-      const pool = D.HEROES.filter(h => h.rarity === 1);
-      const id = pool[Math.floor(this.rng() * pool.length)].id;
-      s.heroes[id] = newOwned(id, this.rng);
-      s.party[0] = id;
+      const r = this.welcome(this.newHeroDef(1, this.rng));
+      s.party[0] = r.id;
       this.save();
-      return id;
+      return r.id;
     },
 
     // ---------- ガチャ ----------
@@ -604,8 +829,34 @@
 
     roomLeft() { return this.dormCap() - Object.keys(this.state.heroes).length; },
 
+    /** 新しい英雄を待機室に迎える（宿舎がいっぱいなら帰ってしまい、二度と会えない） */
+    welcome(def) {
+      const s = this.state;
+      if (D.heroById[def.id] && !def.generated && s.everSummoned.includes(def.id) && !s.heroes[def.id]) return { id: def.id, isNew: false, gone: true };
+      if (def.generated) { registerDef(def); s.heroDefs[def.id] = def; }
+      else if (!s.everSummoned.includes(def.id)) s.everSummoned.push(def.id);
+      if (!s.usedNames.includes(def.name)) s.usedNames.push(def.name);
+      if (this.roomLeft() <= 0) {
+        const shards = D.FAREWELL_SHARDS[def.rarity];
+        s.shards += shards;
+        if (def.generated) delete s.heroDefs[def.id];
+        return { id: def.id, isNew: false, full: true, shards, name: def.name, rarity: def.rarity, def };
+      }
+      s.heroes[def.id] = newOwned(def.id, this.rng);
+      for (const other of Object.keys(s.heroes)) if (other !== def.id) s.rel[relKey(def.id, other)] = initialRel(def.id, other, this.rng);
+      return { id: def.id, isNew: true, name: def.name, rarity: def.rarity, def };
+    },
+    /** 新しく英雄を1人作る（特別な英雄は、一度も出ていなければ低い確率で出る） */
+    newHeroDef(rarity, rng) {
+      const s = this.state;
+      const specials = D.HEROES.filter(h => h.rarity === rarity && !s.everSummoned.includes(h.id) && !s.heroes[h.id]);
+      if (specials.length && rng() < 0.12) return specials[Math.floor(rng() * specials.length)];
+      const def = HG.generate(rng, rarity, new Set(s.usedNames), s.serial++);
+      return def;
+    },
     addHero(id) {
       const s = this.state;
+      if (!s.heroes[id] && D.heroById[id] && !D.heroById[id].generated) return this.welcome(D.heroById[id]);
       if (!s.heroes[id]) {
         if (this.roomLeft() <= 0) {
           // 宿舎がいっぱい: 新しい英雄は門の向こうへ帰り、星の欠片を残していく
@@ -629,12 +880,10 @@
       s.gems -= cost;
       const results = [];
       for (let i = 0; i < n; i++) {
-        const lastOfTen = n === 10 && i === n - 1 && !results.some(r => D.heroById[r.id].rarity >= 2);
+        const lastOfTen = n === 10 && i === n - 1 && !results.some(r => r.rarity >= 2);
         const rarity = this.rollRarity(rng, lastOfTen);
         s.pity = rarity === 3 ? 0 : s.pity + 1;
-        const pool = D.HEROES.filter(h => h.rarity === rarity);
-        const hero = pool[Math.floor(rng() * pool.length)];
-        results.push(this.addHero(hero.id));
+        results.push(this.welcome(this.newHeroDef(rarity, rng)));
       }
       s.stats.pulls += n;
       for (const r of results) {
@@ -682,12 +931,31 @@
       s.gems += gems;
       s.shards += shards;
 
+      // 戦闘を通して伸びる（使った能力が伸びる。才能がないと少しだけ）
+      const growth = {};
+      for (const st of extra.heroStats || []) {
+        const id = st.heroId;
+        if (!s.heroes[id] || fallenIds.includes(id)) continue;
+        const tal = this.talents(id);
+        const k = win ? 1 : 0.5;
+        const g = {};
+        const add = (stat, n) => { const m = Math.max(0.25, D.TALENT_MULT[tal[stat]]); const v = this.addBonus(id, stat, D.TRAIN_GAIN * m * n * k); if (v >= 0.0005) g[stat] = v; };
+        add('atk', Math.min(5, (st.hits || 0) / 6));
+        add('hp', Math.min(4, (st.taken || 0) / (this.stats(id).hp * 0.6)));
+        add('def', Math.min(3, (st.taken || 0) / (this.stats(id).hp * 0.9)));
+        add('spd', Math.min(3, (st.acts || 0) / 15));
+        if (Object.keys(g).length) growth[id] = g;
+      }
+      // 裏切り: 仲は戻らないほど悪くなる
+      const betrayed = new Map();
+      for (const b of extra.betrayals || []) { this.addRel(b.by, b.victim, -100); if (b.killed) betrayed.set(b.victim, b.by); }
       // 永久ロスト
       const fallen = [];
       for (const id of fallenIds) {
         const h = s.heroes[id];
         if (!h) continue;
-        fallen.push({ id, name: D.heroById[id].name, star: h.star, lv: h.lv, floor: fi + 1, battle: s.stats.battles });
+        fallen.push({ id, name: D.heroById[id].name, star: h.star, lv: h.lv, floor: fi + 1, battle: s.stats.battles,
+          cause: betrayed.has(id) ? 'betrayal' : 'battle', by: betrayed.has(id) ? D.heroById[betrayed.get(id)].name : null });
         this.removeHero(id);
         s.stats.lost++;
       }
@@ -747,13 +1015,13 @@
       const proposal = this.maybePropose();
       this.save();
       return { win, reason: reason || null, exp, gold, gems, shards, firstClear, levelUps, fallen, trust, newcomer, freedZone, worldSaved, mvp,
-        trainExp: trained.length ? trainExp : 0, trained, proposal };
+        trainExp: trained.length ? trainExp : 0, trained, proposal, growth };
     },
   };
 
   const api = {
     Game, expToNext, floorExp, floorGold, firstClearGems, firstClearShards, repeatShards, traitSlots,
-    newState, newOwned, sanitize, SAVE_KEY, rollDifficulty, isBossFloor,
+    newState, newOwned, sanitize, SAVE_KEY, rollDifficulty, isBossFloor, relKey, registerDef,
   };
   if (isNode) module.exports = api;
   else root.GameCore = api;

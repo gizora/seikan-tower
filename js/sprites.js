@@ -3,7 +3,7 @@
   'use strict';
   const D = root.GameData;
   const OUTLINE = '#1a1226';
-  const HW = 24, HH = 48;                     // 英雄の絵の大きさ（ドット）。人の頭身（約6.5頭身）で描く
+  const HW = 32, HH = 64;                     // 英雄の絵の大きさ（ドット）。斜め前から見た、人の頭身の姿
 
   // ---------- 色の道具 ----------
   function hex(c) { const n = parseInt(c.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
@@ -64,355 +64,382 @@
     return c;
   }
 
-  // ---------- 英雄（人の頭身。部品を順に描き重ねる） ----------
-  const BUILD = {
-    slim:   { sl: 8, sr: 15, tl: 9, tr: 14, al: 7, ar: 16 },
-    normal: { sl: 7, sr: 16, tl: 8, tr: 15, al: 6, ar: 17 },
-    broad:  { sl: 6, sr: 17, tl: 7, tr: 16, al: 5, ar: 18 },
-  };
-  const WOOD = '#7a4e2a', WOOD_D = '#4e3018', METAL = '#d4dae6', METAL_D = '#8a92a6', GOLD = '#f0c850', CLOTH_W = '#f4f0e8';
 
-  /**
-   * look から 24×48 の絵を作る。frame: 0 = 立ち、1 = 歩き
-   * 体の位置（標準の背丈 o=0）: 顔 y7〜12 / 首 y13 / 肩 y14 / 腰 y23 / 脚 y28〜 / 靴 y41〜46
-   */
-  function heroGrid(look, frame) {
-    const g = makeGrid(HW, HH);
-    const o = look.h || 0;                       // 大きいほど背が低い（上半身を下にずらし、脚を短くする）
-    const B = BUILD[look.build] || BUILD.normal;
+  // ---------- 英雄（32×64 ドット・斜め前から見た姿。骨組みに肉付けして、ポーズを変えられる） ----------
+  const LIGHT = [-0.6, -0.8];                  // 光は左上から
+  const WOOD = '#7a4e2a', METAL = '#d4dae6', GOLD = '#f0c850', CLOTH_W = '#f4f0e8';
+
+  /** 描くための画用紙。色と、陰影のための「明るさ」を持つ */
+  function Canvas2(w, h) {
+    this.w = w; this.h = h;
+    this.col = new Array(w * h).fill(null);
+    this.lit = new Float32Array(w * h);
+  }
+  Canvas2.prototype.set = function (x, y, c, l) {
+    x = Math.round(x); y = Math.round(y);
+    if (x < 0 || y < 0 || x >= this.w || y >= this.h || !c) return;
+    this.col[y * this.w + x] = c; this.lit[y * this.w + x] = l || 0;
+  };
+  /** 太さのある線（腕・脚・武器）。光の向きで3段階の陰をつける */
+  Canvas2.prototype.capsule = function (x1, y1, x2, y2, r, c) {
+    const minx = Math.floor(Math.min(x1, x2) - r - 1), maxx = Math.ceil(Math.max(x1, x2) + r + 1);
+    const miny = Math.floor(Math.min(y1, y2) - r - 1), maxy = Math.ceil(Math.max(y1, y2) + r + 1);
+    const dx = x2 - x1, dy = y2 - y1, len2 = dx * dx + dy * dy || 1;
+    for (let y = miny; y <= maxy; y++) for (let x = minx; x <= maxx; x++) {
+      const t = Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / len2));
+      const px = x - (x1 + dx * t), py = y - (y1 + dy * t);
+      const d = Math.hypot(px, py);
+      if (d <= r + 0.15) this.set(x, y, c, (px * LIGHT[0] + py * LIGHT[1]) / Math.max(0.8, r));
+    }
+  };
+  Canvas2.prototype.ellipse = function (cx, cy, rx, ry, c, flat) {
+    for (let y = Math.floor(cy - ry - 1); y <= Math.ceil(cy + ry + 1); y++) for (let x = Math.floor(cx - rx - 1); x <= Math.ceil(cx + rx + 1); x++) {
+      const nx = (x - cx) / Math.max(0.5, rx), ny = (y - cy) / Math.max(0.5, ry);
+      if (nx * nx + ny * ny <= 1.05) this.set(x, y, c, flat ? 0 : (nx * LIGHT[0] + ny * LIGHT[1]));
+    }
+  };
+  /** 多角形（胴・すそ・マント・帽子） */
+  Canvas2.prototype.poly = function (pts, c, shadeX) {
+    const ys = pts.map(p => p[1]);
+    const miny = Math.floor(Math.min(...ys)), maxy = Math.ceil(Math.max(...ys));
+    const xs = pts.map(p => p[0]);
+    const minx = Math.min(...xs), maxx = Math.max(...xs);
+    for (let y = miny; y <= maxy; y++) {
+      const cross = [];
+      for (let i = 0; i < pts.length; i++) {
+        const [ax, ay] = pts[i], [bx, by] = pts[(i + 1) % pts.length];
+        if ((ay <= y + 0.5 && by > y + 0.5) || (by <= y + 0.5 && ay > y + 0.5)) cross.push(ax + (y + 0.5 - ay) / (by - ay) * (bx - ax));
+      }
+      cross.sort((a, b) => a - b);
+      for (let i = 0; i + 1 < cross.length; i += 2) {
+        for (let x = Math.ceil(cross[i] - 0.5); x <= Math.floor(cross[i + 1] - 0.5); x++) {
+          const l = shadeX === false ? 0 : ((x - (minx + maxx) / 2) / Math.max(1, (maxx - minx) / 2)) * -0.7;
+          this.set(x, y, c, l);
+        }
+      }
+    }
+  };
+  /** 3段階の陰をつけ、まわりに色つきの縁取りをする */
+  Canvas2.prototype.finish = function (keep) {
+    const { w, h } = this;
+    const out = makeGrid(w, h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const c = this.col[y * w + x];
+      if (!c) continue;
+      if (keep.has(c)) { out[y][x] = c; continue; }
+      const l = this.lit[y * w + x];
+      out[y][x] = l > 0.42 ? shade(c, 1.18) : l < -0.38 ? shade(c, 0.72) : c;
+    }
+    const res = out.map(r => r.slice());
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (out[y][x]) continue;
+      let n = null;
+      for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) { const yy = y + dy, xx = x + dx; if (yy >= 0 && yy < h && xx >= 0 && xx < w && out[yy][xx]) { n = out[yy][xx]; break; } }
+      if (n) res[y][x] = shade(n, 0.28);
+    }
+    return res;
+  };
+
+  const BUILDS = { slim: 3.4, normal: 4.0, broad: 4.9 };
+
+  // ポーズ: 角度は度（0 = 右、90 = 下）。front は手前（右）、back は奥（左）
+  const POSES = {
+    idle0: { fa: [78, 12], ba: [100, 10], fl: [96, 0], bl: [86, 0], lean: 0, bob: 0 },
+    idle1: { fa: [80, 14], ba: [98, 12], fl: [96, 0], bl: [86, 0], lean: 0, bob: 1 },
+    walk0: { fa: [62, 18], ba: [118, 8], fl: [112, -14], bl: [68, 16], lean: 1, bob: 0 },
+    walk1: { fa: [80, 12], ba: [100, 10], fl: [94, 4], bl: [88, 6], lean: 1, bob: 1 },
+    walk2: { fa: [112, 8], ba: [66, 18], fl: [68, 16], bl: [112, -14], lean: 1, bob: 0 },
+    walk3: { fa: [80, 12], ba: [100, 10], fl: [88, 6], bl: [94, 4], lean: 1, bob: 1 },
+    atk0:  { fa: [-70, 40], ba: [120, 20], fl: [100, 0], bl: [78, 6], lean: -1, bob: 0 },
+    atk1:  { fa: [20, 6], ba: [130, 10], fl: [70, 14], bl: [108, -6], lean: 2, bob: 0 },
+    cast:  { fa: [-30, 30], ba: [-40, 34], fl: [96, 0], bl: [84, 0], lean: 0, bob: 0 },
+    hurt:  { fa: [140, -20], ba: [60, 20], fl: [104, -6], bl: [80, 6], lean: -2, bob: 1 },
+  };
+  const rad = (d) => d * Math.PI / 180;
+
+  /** look とポーズから 32×64 の絵を作る */
+  function heroGrid(look, pose) {
+    const P = POSES[pose] || POSES.idle0;
+    const cv = new Canvas2(HW, HH);
     const gear = look.gear || [];
     const has = (k) => gear.includes(k);
-    const S = look.skin, Sd = shade(look.skin, 0.84);
-    const H = look.hair, Hd = shade(look.hair, 0.74);
-    const C1 = look.c1, C1d = shade(look.c1, 0.74), C2 = look.c2;
-    const P = look.pants, BT = look.boots;
-    const M = look.metal || METAL, Md = look.metal ? shade(look.metal, 0.7) : METAL_D;
-    const T = look.hat || look.c1, Td = shade(look.hat || look.c1, 0.72);
-    const GEM = look.gem || '#ffe27a';
-    const EYE = look.eye || '#2a1d3a';
-
-    const R = (x, y, w, h, c) => { if (!c) return; for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (j >= 0 && j < HH && i >= 0 && i < HW) g[j][i] = c; };
-    const D1 = (x, y, c) => R(x, y, 1, 1, c);
-    const ROWX = (y, x0, x1, c) => R(x0, y, x1 - x0 + 1, 1, c);
-
-    const y0 = 7 + o;                            // 顔のいちばん上
-    const sh = 14 + o;                           // 肩
-    const waist = 23 + o;
-    const hipEnd = 27 + o;
-    const legTop = 28 + o;
-    const bootTop = 41;
-    const feet = 46;
-    const hy = 26 + o;                           // 手の高さ
-    const knee = Math.round((legTop + bootTop) / 2);
-    const walk = frame === 1;
+    const S = look.skin, H = look.hair, C1 = look.c1, C2 = look.c2;
+    const PANTS = look.pants, BOOT = look.boots, EYE = look.eye || '#2a1d3a';
+    const M = look.metal || METAL, GEM = look.gem || '#ffe27a', HAT = look.hat || C1;
     const top = look.top || 'tunic';
-    const longSkirt = top === 'robe';
-    const skirt = top === 'robe' || top === 'dress';
+    const robe = top === 'robe', dress = top === 'dress';
+    const sw = BUILDS[look.build] || BUILDS.normal;
+    const hgt = 54 - (look.h || 0) * 2.2;                 // 背の高さ
+    const feet = 62;
+    const headTop = feet - hgt + P.bob;
+    const cx = 15 + P.lean * 0.5;
+    const headR = 4.1;
+    const hc = { x: cx + 1 + P.lean * 0.6, y: headTop + 4.6 };
+    const neckY = headTop + 9.4;
+    const shY = headTop + 11.2;
+    const waistY = headTop + 23;
+    const hipY = headTop + 27.5;
+    const legLen = feet - hipY;
+    const upperArm = hgt * 0.17, foreArm = hgt * 0.15;
+    const sF = { x: cx + sw * 0.95 + P.lean, y: shY + 0.6 }, sB = { x: cx - sw * 0.75 + P.lean, y: shY - 0.4 };
+    const hF = { x: cx + 1.8, y: hipY }, hB = { x: cx - 1.6, y: hipY };
+    const limb = (s, a1, bend, l1, l2) => {
+      const e = { x: s.x + Math.cos(rad(a1)) * l1, y: s.y + Math.sin(rad(a1)) * l1 };
+      const a2 = a1 + bend;
+      const h = { x: e.x + Math.cos(rad(a2)) * l2, y: e.y + Math.sin(rad(a2)) * l2 };
+      return { s, e, h, a2 };
+    };
+    const armF = limb(sF, P.fa[0], P.fa[1], upperArm, foreArm);
+    const armB = limb(sB, P.ba[0], P.ba[1], upperArm * 0.95, foreArm * 0.95);
+    const legF = limb(hF, P.fl[0], P.fl[1], legLen * 0.5, legLen * 0.52);
+    const legB = limb(hB, P.bl[0], P.bl[1], legLen * 0.5, legLen * 0.52);
+    // 足は地面より下に行かない
+    for (const L of [legF, legB]) { const over = L.h.y - feet; if (over > 0) { L.h.y = feet; L.e.y -= over / 2; } }
 
-    // ===== 1. 背中のもの（マント・羽・後ろ髪・矢筒） =====
+    const sleeveC = top === 'armor' ? M : top === 'vest' ? S : C1;
+    const foreC = top === 'armor' ? shade(M, 0.85) : (top === 'leather' || top === 'vest' || top === 'dress' || top === 'tunic') ? S : C1;
+    const armR = Math.max(1.3, sw * 0.36), legR = Math.max(1.5, sw * 0.42);
+
+    // ===== 1. いちばん奥: マント・羽・後ろ髪・矢筒 =====
     if (has('cape')) {
-      const X = look.cape || '#a82a34';
-      for (let y = sh; y <= 43; y++) {
-        const k = Math.floor((y - sh) / 9);
-        ROWX(y, B.sl - 1 - k, B.sr + 1 + k, y >= 41 ? shade(X, 0.8) : X);
-      }
+      const X = look.cape || '#7a2a34';
+      const sway = pose.startsWith('walk') ? (pose === 'walk0' ? -2 : pose === 'walk2' ? 1 : -0.5) : 0;
+      cv.poly([[sB.x - 1.5, shY - 1], [sF.x + 0.5, shY - 1], [cx + 3 + sway, feet - 3], [cx - 7 + sway * 1.5, feet - 1], [cx - 5, waistY]], X);
     }
     if (has('wings')) {
-      const Wc = '#d8fbff', Wd = '#8fd0e0';
-      const wing = ['..WW', '.WWW', 'WWWd', 'WWWd', 'WWdd', '.Wdd', '..Wd', '.WWd', 'WWWd', '.WWd', '..W.'];
-      paint(g, wing.map(r => r), sh - 3, { W: Wc, d: Wd }, B.al - 5);
-      paint(g, wing.map(r => r.split('').reverse().join('')), sh - 3, { W: Wc, d: Wd }, B.ar + 2);
+      const Wc = '#d8fbff';
+      cv.poly([[cx - 2, shY + 2], [cx - 14, shY - 8], [cx - 15, shY + 4], [cx - 8, shY + 12]], Wc, false);
+      cv.poly([[cx + 1, shY + 2], [cx + 9, shY - 10], [cx + 11, shY + 2], [cx + 5, shY + 10]], shade(Wc, 0.9), false);
     }
-    if (look.style === 'long') R(8, y0, 8, 12, Hd);
-    if (look.style === 'bob') R(8, y0 + 3, 8, 4, Hd);
-    if (look.style === 'ponytail') { R(15, y0 - 1, 2, 3, H); R(16, y0 + 2, 2, 9, H); R(17, y0 + 6, 1, 6, Hd); }
-    if (look.weapon === 'bow') {                 // 矢筒
-      R(B.sr - 1, sh - 3, 2, 12, '#7a4a28');
-      D1(B.sr - 1, sh - 4, CLOTH_W); D1(B.sr, sh - 5, '#c83a3a'); D1(B.sr, sh - 4, CLOTH_W);
-    }
+    const longHair = look.style === 'long' || look.style === 'ponytail' || look.style === 'twin';
+    if (look.style === 'long' && !has('helmet')) cv.poly([[hc.x - 4.5, hc.y - 1], [hc.x + 2, hc.y - 1], [hc.x + 1, hc.y + 13], [hc.x - 6, hc.y + 14]], shade(H, 0.85));
+    if (look.style === 'ponytail' && !has('helmet')) { cv.capsule(hc.x - 3.5, hc.y - 1.5, hc.x - 6.5, hc.y + 4, 1.6, H); cv.capsule(hc.x - 6.5, hc.y + 4, hc.x - 6, hc.y + 11, 1.3, shade(H, 0.9)); }
+    if (look.weapon === 'bow') { cv.capsule(sB.x + 0.5, shY - 3, sB.x - 2.5, shY + 9, 1.4, '#6a4026'); cv.capsule(sB.x + 1, shY - 5, sB.x + 0.5, shY - 3, 0.8, CLOTH_W); }
 
-    // ===== 2. 脚と靴 =====
-    const lx0 = B.tl, lx1 = 11, rx0 = 12, rx1 = B.tr;
-    for (let y = legTop; y < bootTop; y++) {
-      const off = walk && y >= knee ? 1 : 0;
-      ROWX(y, lx0 - off, lx1 - off, P);
-      ROWX(y, rx0 + off, rx1 + off, P);
-      D1(lx1 - off, y, shade(P, 0.8));
-    }
-    for (let y = bootTop; y <= feet; y++) {
-      const off = walk ? 1 : 0;
-      ROWX(y, lx0 - off - (y === feet ? 1 : 0), lx1 - off, BT);
-      ROWX(y, rx0 + off, rx1 + off + (y === feet ? 1 : 0), BT);
-    }
-    R(lx0 - (walk ? 1 : 0), bootTop, lx1 - lx0 + 1, 1, shade(BT, 1.25));   // 靴の折り返し
-    R(rx0 + (walk ? 1 : 0), bootTop, rx1 - rx0 + 1, 1, shade(BT, 1.25));
+    // ===== 2. 奥の腕と脚 =====
+    const drawLeg = (L, back) => {
+      const pc = back ? shade(PANTS, 0.85) : PANTS;
+      cv.capsule(L.s.x, L.s.y, L.e.x, L.e.y, legR, pc);
+      const bootStart = { x: L.e.x + (L.h.x - L.e.x) * 0.35, y: L.e.y + (L.h.y - L.e.y) * 0.35 };
+      cv.capsule(L.e.x, L.e.y, bootStart.x, bootStart.y, legR * 0.92, pc);
+      cv.capsule(bootStart.x, bootStart.y, L.h.x, L.h.y - 0.5, legR * 0.95, back ? shade(BOOT, 0.85) : BOOT);
+      cv.capsule(L.h.x - 0.5, L.h.y, L.h.x + 2.2, L.h.y, 1.1, back ? shade(BOOT, 0.85) : BOOT);   // つま先
+    };
+    const drawArm = (A, back) => {
+      const k = back ? 0.82 : 1;
+      cv.capsule(A.s.x, A.s.y, A.e.x, A.e.y, armR, shade(sleeveC, k));
+      cv.capsule(A.e.x, A.e.y, A.h.x, A.h.y, armR * 0.9, shade(foreC, k));
+      if (top === 'robe' && !back) cv.capsule(A.e.x, A.e.y, A.e.x + Math.cos(rad(A.a2)) * 2.5, A.e.y + Math.sin(rad(A.a2)) * 2.5, armR * 1.35, shade(C1, k));
+      cv.ellipse(A.h.x, A.h.y, 1.3, 1.3, top === 'armor' ? shade(M, 0.8 * k) : shade(S, k));
+    };
+    drawArm(armB, true);
+    if (!robe) drawLeg(legB, true);
 
     // ===== 3. 胴と服 =====
-    const torso = (c, from, to) => {
-      for (let y = from; y <= to; y++) {
-        if (y === sh) ROWX(y, B.sl + 1, B.sr - 1, c);
-        else if (y <= sh + 3) ROWX(y, B.sl, B.sr, c);
-        else ROWX(y, B.tl, B.tr, c);
+    const tw = sw * 0.85;           // 腰の太さ
+    const torso = [[sB.x - 0.8, shY], [sF.x + 0.8, shY + 0.4], [cx + tw + P.lean * 0.5, waistY], [cx + tw * 0.95, hipY + 1], [cx - tw * 0.95, hipY + 1], [cx - tw + P.lean * 0.3, waistY]];
+    if (robe || dress) {
+      const len = robe ? feet - 0.5 : feet - 8;
+      const flare = robe ? 5.5 : 4.5;
+      const sway = pose.startsWith('walk') ? (pose === 'walk0' ? 1.5 : pose === 'walk2' ? -1.5 : 0) : 0;
+      cv.poly([[cx - tw, waistY], [cx + tw, waistY], [cx + tw + flare + sway, len], [cx - tw - flare + sway, len]], C1);
+      cv.poly([[cx + 0.5, waistY + 1], [cx + 2, waistY + 1], [cx + 3 + flare * 0.4 + sway, len], [cx + 1 + flare * 0.2 + sway, len]], C2, false);   // 前の縁
+      if (dress) { drawLeg(legB, true); drawLeg(legF, false); cv.poly([[cx - tw, waistY], [cx + tw, waistY], [cx + tw + flare + sway, len], [cx - tw - flare + sway, len]], C1); }
+      cv.poly(torso, C1);
+      cv.capsule(cx - tw, waistY, cx + tw, waistY, 0.9, C2);
+      if (robe) { cv.capsule(legF.h.x, feet - 0.5, legF.h.x + 2, feet - 0.5, 1, BOOT); }
+    } else {
+      cv.poly(torso, top === 'armor' ? M : top === 'vest' ? S : C1);
+      if (top === 'coat') {
+        const tail = Math.min(feet - 6, hipY + 13);
+        const sway = pose.startsWith('walk') ? (pose === 'walk0' ? -1.5 : pose === 'walk2' ? 1.5 : 0) : 0;
+        drawLeg(legF, false);
+        cv.poly([[cx - tw, hipY - 1], [cx - 0.5, hipY], [cx - 1 + sway, tail], [cx - tw - 3 + sway, tail - 1]], shade(C1, 0.9));
+        cv.poly([[cx + 1.5, hipY], [cx + tw + 0.5, hipY - 1], [cx + tw + 3 + sway, tail - 1], [cx + 2.5 + sway, tail]], C1);
+        cv.capsule(cx + 1, shY + 2, cx + 1.5, hipY, 0.5, C2);
+        for (let y = shY + 4; y < waistY; y += 3) cv.set(cx + 1.5, y, GOLD);
+        cv.capsule(cx - tw, waistY, cx + tw, waistY, 0.8, shade(C1, 0.5));
+        cv.set(cx + 1, waistY, C2);
+      } else if (top === 'armor') {
+        cv.poly([[cx - 1.5, shY + 3], [cx + 3, shY + 3], [cx + 2.5, hipY + 6], [cx - 1, hipY + 6]], C1, false);       // 胸当ての上の布
+        cv.capsule(cx - tw, waistY, cx + tw, waistY, 0.9, '#4a3424');
+        cv.capsule(cx - tw + 0.5, shY + 5.5, cx + tw, shY + 5.5, 0.5, shade(M, 0.75));
+        drawLeg(legF, false);
+      } else if (top === 'vest') {
+        cv.poly([[sB.x - 0.5, shY], [cx - 1, shY + 1], [cx - 1.2, waistY], [cx - tw, waistY]], C1);
+        cv.poly([[cx + 1.8, shY + 1], [sF.x + 0.5, shY + 0.4], [cx + tw, waistY], [cx + 2, waistY]], C1);
+        cv.set(cx, shY + 6, shade(S, 0.8)); cv.set(cx + 1, shY + 6, shade(S, 0.8)); cv.set(cx, shY + 9, shade(S, 0.8));
+        cv.capsule(cx - tw, waistY + 1, cx + tw, waistY + 1, 0.9, C2);
+        drawLeg(legF, false);
+      } else if (top === 'leather') {
+        cv.capsule(sF.x - 0.5, shY + 0.5, cx - tw + 0.5, waistY - 1, 0.6, C2);
+        cv.capsule(cx - tw, waistY, cx + tw, waistY, 0.9, C2);
+        cv.set(cx + 1, waistY, GOLD);
+        drawLeg(legF, false);
+      } else if (top === 'overalls') {
+        cv.poly([[cx - tw + 0.5, shY + 4], [cx + tw - 0.5, shY + 4], [cx + tw, hipY + 1], [cx - tw, hipY + 1]], C1);
+        cv.capsule(cx - tw + 1.2, shY, cx - tw + 1.2, shY + 4, 0.6, C1); cv.capsule(cx + tw - 1, shY, cx + tw - 1, shY + 4, 0.6, C1);
+        drawLeg(legF, false);
+      } else {
+        cv.capsule(cx - tw, waistY, cx + tw, waistY, 0.9, C2);
+        cv.set(cx + 1, waistY, GOLD);
+        cv.poly([[cx - tw, waistY + 1], [cx + tw, waistY + 1], [cx + tw + 1, hipY + 3], [cx - tw - 1, hipY + 3]], C1);   // チュニックのすそ
+        drawLeg(legF, false);
       }
-    };
-    const skirtRows = (c, from, to, trim) => {
-      for (let y = from; y <= to; y++) {
-        const k = Math.floor((y - from) / 4);
-        ROWX(y, B.tl - k, B.tr + k, c);
-      }
-      if (trim) ROWX(to, B.tl - Math.floor((to - from) / 4), B.tr + Math.floor((to - from) / 4), trim);
-    };
-    let sleeve = C1, forearm = C1, cuff = C2;
-    if (top === 'tunic') {
-      torso(C1, sh, hipEnd);
-      ROWX(waist, B.tl, B.tr, C2); D1(12, waist, GOLD);
-      D1(11, sh, S); D1(12, sh, S); D1(11, sh + 1, Sd);
-    } else if (top === 'coat') {
-      torso(C1, sh, hipEnd);
-      const tailEnd = Math.min(39, hipEnd + 11);
-      for (let y = hipEnd + 1; y <= tailEnd; y++) {
-        const k = Math.floor((y - hipEnd) / 5);
-        ROWX(y, B.tl - k, 10, C1); ROWX(y, 13, B.tr + k, C1);
-        D1(10, y, C2); D1(13, y, C2);
-      }
-      for (let y = sh + 1; y <= hipEnd; y++) { D1(11, y, C1d); }
-      ROWX(waist, B.tl, B.tr, shade(C1, 0.55)); D1(12, waist, C2);
-      D1(10, sh - 1, C1); D1(13, sh - 1, C1);   // 高いえり
-      for (let y = sh + 1; y < waist; y += 3) D1(12, y, C2);
-    } else if (top === 'armor') {
-      torso(M, sh, waist);
-      for (let y = sh + 1; y < waist; y++) D1(B.tr, y, Md);
-      ROWX(sh + 4, B.tl + 1, B.tr - 1, Md);
-      R(10, sh + 3, 4, hipEnd + 6 - (sh + 3), C1);          // 胸当ての上の布（タバード）
-      for (let y = sh + 3; y <= hipEnd + 5; y++) { D1(10, y, C2); D1(13, y, C2); }
-      ROWX(waist, B.tl, B.tr, '#4a3424'); D1(12, waist, GOLD);
-      R(B.tl, waist + 1, B.tr - B.tl + 1, hipEnd - waist, Md);
-      R(10, waist + 1, 4, hipEnd + 6 - waist - 1, C1);
-      R(B.sl - 1, sh - 1, 4, 3, M); R(B.sr - 2, sh - 1, 4, 3, M);   // 肩当て
-      ROWX(sh + 1, B.sl - 1, B.sl + 2, Md); ROWX(sh + 1, B.sr - 2, B.sr + 1, Md);
-      sleeve = M; forearm = Md; cuff = M;
-    } else if (top === 'robe') {
-      torso(C1, sh, waist);
-      ROWX(waist, B.tl, B.tr, C2);
-      skirtRows(C1, waist + 1, 45, C2);
-      for (let y = sh + 1; y <= 45; y++) if (y !== waist) { D1(11, y, C2); }
-      D1(11, sh, S); D1(12, sh, S);
-    } else if (top === 'dress') {
-      torso(C1, sh, waist);
-      ROWX(waist, B.tl, B.tr, C2); D1(11, waist + 1, C2); D1(12, waist + 1, C2);
-      skirtRows(C1, waist + 1, Math.min(41, waist + 18), C2);
-      D1(11, sh, S); D1(12, sh, S);
-      sleeve = C1; forearm = S; cuff = C2;
-    } else if (top === 'leather') {
-      torso(C1, sh, hipEnd);
-      for (let i = 0; i <= waist - sh; i++) D1(B.sl + 1 + Math.round(i * (B.tr - B.sl - 1) / (waist - sh)), sh + i, C2);
-      ROWX(waist, B.tl, B.tr, C2); D1(12, waist, GOLD);
-      R(B.tl, waist + 1, B.tr - B.tl + 1, hipEnd - waist, P);
-      sleeve = C1; forearm = S; cuff = C2;
-    } else if (top === 'vest') {
-      torso(S, sh, waist);
-      for (let y = sh; y <= waist; y++) { ROWX(y, y <= sh + 3 ? B.sl : B.tl, (y <= sh + 3 ? B.sl : B.tl) + 2, C1); ROWX(y, (y <= sh + 3 ? B.sr : B.tr) - 2, y <= sh + 3 ? B.sr : B.tr, C1); }
-      D1(11, sh + 5, Sd); D1(12, sh + 5, Sd); D1(11, sh + 8, Sd); D1(12, sh + 8, Sd);
-      ROWX(waist + 1, B.tl, B.tr, C2);
-      R(B.tl, waist + 2, B.tr - B.tl + 1, hipEnd - waist - 1, P);
-      sleeve = S; forearm = S; cuff = C2;
-    } else if (top === 'overalls') {
-      torso(C2, sh, sh + 3);
-      torso(C1, sh + 4, hipEnd);
-      for (let y = sh; y <= sh + 3; y++) { D1(B.tl + 1, y, C1); D1(B.tr - 1, y, C1); }
-      D1(B.tl + 1, sh + 4, GOLD); D1(B.tr - 1, sh + 4, GOLD);
-      sleeve = C2; forearm = S; cuff = C2;
+    }
+    if (top === 'armor') {   // 肩当て
+      cv.ellipse(sF.x, sF.y + 0.4, sw * 0.62, 2.1, M);
+      cv.ellipse(sB.x, sB.y + 0.4, sw * 0.5, 1.8, shade(M, 0.85));
     }
 
-    // ===== 4. 腕と手 =====
-    const armTop = sh + 1, armEnd = hy - 1;
-    for (let y = armTop; y <= armEnd; y++) {
-      const fore = y > armTop + 5;
-      const c = fore ? forearm : sleeve;
-      const flare = longSkirt && y >= armEnd - 2 ? 1 : 0;
-      ROWX(y, B.al - flare, B.al + 1, c);
-      ROWX(y, B.ar - 1, B.ar + flare, c);
-      if (y === armEnd && cuff !== c) { ROWX(y, B.al - flare, B.al + 1, cuff); ROWX(y, B.ar - 1, B.ar + flare, cuff); }
+    // ===== 4. 首と頭 =====
+    cv.capsule(hc.x - 0.3, hc.y + 3, cx + 0.6, neckY + 1.2, 1.25, shade(S, 0.9));
+    if (has('scarf')) {
+      const Q = look.scarf || '#b03a3a';
+      cv.capsule(cx - 2.5, neckY + 1, cx + 3, neckY + 1.4, 1.4, Q);
+      cv.capsule(cx - 2, neckY + 1.5, cx - 6, neckY + 6 + (pose.startsWith('walk') ? 1 : 0), 1, shade(Q, 0.85));
     }
-    const hand = top === 'armor' ? Md : S;
-    R(B.al, hy, 2, 2, hand);
-    R(B.ar - 1, hy, 2, 2, hand);
+    cv.ellipse(hc.x, hc.y, headR - 0.3, headR + 0.3, S);
+    cv.ellipse(hc.x + 1.2, hc.y + 2.2, 2.4, 1.8, S);                          // あご（斜め前を向く）
+    cv.set(hc.x - 3.4, hc.y + 0.6, shade(S, 0.85));                           // 耳
+    if (has('elfEars')) { cv.capsule(hc.x - 3.4, hc.y + 0.4, hc.x - 6, hc.y - 2.2, 0.6, S); }
+    // 目（手前の目は大きく、奥の目は小さく）
+    const eyeY = Math.round(hc.y + 0.6);
+    cv.set(hc.x + 2, eyeY, EYE); cv.set(hc.x + 2, eyeY - 1, EYE); cv.set(hc.x + 3, eyeY, '#f4f0f0'); cv.set(hc.x + 3, eyeY - 1, shade(S, 0.8));
+    cv.set(hc.x - 0.6, eyeY, EYE);
+    cv.set(hc.x + 2, eyeY - 1, shade(EYE, 1.4));
+    cv.set(hc.x + 3.6, eyeY + 1.6, shade(S, 0.82));                           // 鼻の陰
+    cv.set(hc.x + 2.2, eyeY + 3, shade(S, 0.7));                              // 口
+    if (has('scar')) { cv.set(hc.x + 1, eyeY - 2, '#a8584a'); cv.set(hc.x + 1.6, eyeY - 1, '#a8584a'); cv.set(hc.x + 2.4, eyeY + 1.4, '#a8584a'); }
 
-    // ===== 5. 首と顔 =====
-    D1(11, y0 + 6, Sd); D1(12, y0 + 6, Sd);                   // 首
-    R(9, y0, 6, 5, S);
-    ROWX(y0 + 5, 10, 13, S);
-    D1(8, y0 + 3, S); D1(15, y0 + 3, Sd);                     // 耳
-    D1(10, y0 + 3, EYE); D1(13, y0 + 3, EYE);                 // 目
-    D1(10, y0 + 2, Hd); D1(13, y0 + 2, Hd);                   // まゆ
-    D1(14, y0 + 4, Sd); D1(13, y0 + 5, Sd);
-    if (look.style === 'bald') { R(9, y0 - 2, 6, 2, S); D1(10, y0 - 2, shade(S, 1.15)); D1(11, y0 - 2, shade(S, 1.15)); }
-
-    // ===== 6. 前髪 =====
-    const cap = () => {
-      ROWX(y0 - 3, 10, 13, H);
-      ROWX(y0 - 2, 9, 14, H);
-      ROWX(y0 - 1, 8, 15, H);
-      ROWX(y0, 8, 15, H);
-      ROWX(y0 + 1, 8, 15, H); D1(11, y0 + 1, null); g[y0 + 1][11] = S; g[y0 + 1][13] = S;
-      D1(8, y0 + 2, H); D1(15, y0 + 2, H); D1(8, y0 + 3, Hd); D1(15, y0 + 3, Hd);
-      D1(10, y0 - 1, Hd); D1(13, y0, Hd);
-    };
-    switch (look.style) {
-      case 'bald':
-        D1(8, y0 + 1, H); D1(8, y0 + 2, H); D1(15, y0 + 1, H); D1(15, y0 + 2, H);
-        break;
-      case 'messy':
-        cap(); D1(10, y0 - 4, H); D1(13, y0 - 4, H); D1(7, y0, H); D1(16, y0 + 1, H); D1(7, y0 + 1, Hd);
-        break;
-      case 'spiky':
-        cap(); D1(9, y0 - 4, H); D1(12, y0 - 5, H); D1(12, y0 - 4, H); D1(15, y0 - 4, H); D1(14, y0 - 3, H); D1(9, y0 - 3, H); D1(16, y0 - 1, H); D1(7, y0 - 1, H);
-        break;
-      case 'swept':
-        cap(); g[y0 + 1][11] = H; g[y0 + 1][13] = H; ROWX(y0 + 2, 12, 15, H); ROWX(y0 + 3, 13, 15, Hd); D1(16, y0 + 1, H);
-        break;
-      case 'long':
-        cap(); R(8, y0 + 2, 1, 10, H); R(15, y0 + 2, 1, 10, H); D1(8, y0 + 11, Hd); D1(15, y0 + 11, Hd); D1(7, y0 + 4, H); D1(16, y0 + 4, H);
-        break;
-      case 'bob':
-        cap(); R(8, y0 + 2, 1, 4, H); R(15, y0 + 2, 1, 4, H); R(7, y0 + 1, 1, 4, H); R(16, y0 + 1, 1, 4, Hd);
-        break;
-      case 'ponytail':
-        cap();
-        break;
-      case 'twin':
-        cap(); R(6, y0, 2, 9, H); R(16, y0, 2, 9, H); D1(6, y0 + 9, Hd); D1(17, y0 + 9, Hd); D1(7, y0, C2); D1(16, y0, C2);
-        break;
-      default:
-        cap();
+    // ===== 5. 髪 =====
+    if (!has('helmet')) {
+      const Hd = shade(H, 0.8);
+      switch (look.style) {
+        case 'bald':
+          cv.capsule(hc.x - 3.6, hc.y + 0.5, hc.x - 3.2, hc.y + 2.5, 0.8, H);
+          break;
+        default: {
+          // 頭のてっぺん
+          cv.ellipse(hc.x - 0.4, hc.y - 2.5, headR + 0.5, 2.7, H);
+          cv.poly([[hc.x - headR - 0.4, hc.y - 1.5], [hc.x - headR + 0.4, hc.y + 3.2], [hc.x - 1.8, hc.y + 1], [hc.x - 1, hc.y - 1.2]], Hd);   // 後ろ側
+          // 前髪
+          if (look.style === 'swept') cv.poly([[hc.x - 1, hc.y - 3.5], [hc.x + headR + 0.6, hc.y - 2.5], [hc.x + headR + 0.4, hc.y + 0.9], [hc.x + 3.2, hc.y - 0.2], [hc.x + 1.4, hc.y - 1]], H);
+          else if (look.style === 'spiky') {
+            cv.poly([[hc.x - 4, hc.y - 3], [hc.x - 2.5, hc.y - 7.5], [hc.x - 1, hc.y - 3.5], [hc.x + 0.5, hc.y - 8], [hc.x + 1.5, hc.y - 3.6], [hc.x + 3.5, hc.y - 6.5], [hc.x + 4.4, hc.y - 1.8]], H);
+            cv.poly([[hc.x + 1, hc.y - 2.6], [hc.x + 4.6, hc.y - 1.6], [hc.x + 3.6, hc.y - 0.6]], H);
+          } else if (look.style === 'messy') {
+            cv.poly([[hc.x - 3, hc.y - 4], [hc.x - 1.5, hc.y - 6], [hc.x, hc.y - 4.4], [hc.x + 2, hc.y - 6], [hc.x + 4.2, hc.y - 2]], H);
+            cv.poly([[hc.x + 0.5, hc.y - 3], [hc.x + 4.4, hc.y - 2], [hc.x + 4, hc.y - 0.6], [hc.x + 2.4, hc.y - 1.4]], H);
+          } else cv.poly([[hc.x - 0.5, hc.y - 3.6], [hc.x + headR + 0.4, hc.y - 2.4], [hc.x + headR, hc.y - 0.4], [hc.x + 2.5, hc.y - 1.4], [hc.x + 1.2, hc.y - 0.4]], H);
+          if (look.style === 'long') { cv.capsule(hc.x + 3.4, hc.y - 1, hc.x + 3.8, hc.y + 7, 0.9, H); }
+          if (look.style === 'bob') { cv.poly([[hc.x - 4.6, hc.y - 1], [hc.x - 3.6, hc.y + 4.5], [hc.x - 1, hc.y + 4], [hc.x - 1.5, hc.y]], H); cv.capsule(hc.x + 3.6, hc.y - 1, hc.x + 3.8, hc.y + 3.5, 0.9, H); }
+          if (look.style === 'twin') { cv.capsule(hc.x - 4.5, hc.y, hc.x - 6.5, hc.y + 9, 1.3, H); cv.capsule(hc.x + 4, hc.y, hc.x + 5, hc.y + 8, 1.1, Hd); cv.set(hc.x - 4.6, hc.y, C2); }
+        }
+      }
     }
+    void longHair;
 
-    // ===== 7. 頭の飾り =====
-    if (has('beard')) { const Z = look.beard || H; D1(9, y0 + 4, Z); D1(14, y0 + 4, Z); D1(11, y0 + 4, Z); D1(12, y0 + 4, Z); ROWX(y0 + 5, 10, 13, Z); ROWX(y0 + 6, 11, 12, shade(Z, 0.8)); }
-    if (has('longBeard')) { const Z = look.beard || '#eeeef4'; ROWX(y0 + 4, 9, 14, Z); R(10, y0 + 5, 4, 5, Z); R(11, y0 + 10, 2, 3, shade(Z, 0.85)); D1(12, y0 + 6, shade(Z, 0.85)); }
-    if (has('scar')) { D1(14, y0 + 3, '#a8584a'); D1(13, y0 + 4, '#a8584a'); }
-    if (has('mask')) { const K = look.mask || T; ROWX(y0 + 4, 9, 14, K); ROWX(y0 + 5, 10, 13, shade(K, 0.8)); }
+    // ===== 6. 頭の飾り =====
+    if (has('beard')) { const Z = look.beard || H; cv.poly([[hc.x - 2, hc.y + 1.5], [hc.x + 4, hc.y + 2], [hc.x + 3.4, hc.y + 5.2], [hc.x, hc.y + 5]], Z); cv.set(hc.x + 2.2, eyeY + 2, shade(Z, 0.7)); }
+    if (has('longBeard')) { const Z = look.beard || '#eeeef4'; cv.poly([[hc.x - 2, hc.y + 1.5], [hc.x + 4, hc.y + 2], [hc.x + 3, hc.y + 10], [hc.x + 0.5, hc.y + 13], [hc.x - 1, hc.y + 7]], Z); }
+    if (has('mask')) { const K = look.mask || HAT; cv.poly([[hc.x - 1.5, hc.y + 1.6], [hc.x + 4.4, hc.y + 1.4], [hc.x + 3.6, hc.y + 4.6], [hc.x - 0.5, hc.y + 4.4]], K); }
     if (has('hood')) {
-      ROWX(y0 - 4, 10, 13, T);
-      ROWX(y0 - 3, 9, 14, T);
-      for (let y = y0 - 2; y <= y0 + 5; y++) { ROWX(y, 7, 8, T); ROWX(y, 15, 16, Td); }
-      ROWX(y0 - 2, 9, 14, T); ROWX(y0 - 1, 9, 14, T); ROWX(y0, 9, 14, Td);
-      ROWX(y0 + 1, 9, 14, H); D1(14, y0 + 2, H);   // フードの中の前髪
-      ROWX(y0 + 6, 8, 10, T); ROWX(y0 + 6, 13, 15, Td);
-      ROWX(sh - 1, B.sl, B.sr, T); ROWX(sh, B.sl - 1, B.sr + 1, Td);          // 肩にかかる布
+      cv.poly([[hc.x - 5.2, hc.y + 1], [hc.x - 3.8, hc.y - 4.8], [hc.x + 0.5, hc.y - 6], [hc.x + 4.4, hc.y - 3.8], [hc.x + 4.8, hc.y - 1.6], [hc.x + 1.6, hc.y - 2.6], [hc.x - 0.6, hc.y + 2], [hc.x - 1.8, hc.y + 6], [hc.x - 5, hc.y + 7]], HAT);
+      cv.poly([[sB.x - 1.5, shY - 1], [sF.x + 1, shY - 0.4], [sF.x + 0.5, shY + 2.5], [sB.x - 2, shY + 3]], shade(HAT, 0.9));
+      cv.set(hc.x + 2, eyeY - 1, shade(EYE, 1.4));   // フードの中で目が光る
     }
     if (has('helmet')) {
-      ROWX(y0 - 3, 10, 13, M); ROWX(y0 - 2, 9, 14, M);
-      for (let y = y0 - 1; y <= y0 + 1; y++) ROWX(y, 8, 15, M);
-      for (let y = y0 + 2; y <= y0 + 5; y++) { ROWX(y, 8, 9, Md); ROWX(y, 14, 15, Md); }
-      ROWX(y0 + 2, 9, 14, Md); R(11, y0 + 2, 2, 3, M);
-      ROWX(y0 + 3, 10, 13, '#120c18'); D1(10, y0 + 3, EYE); D1(13, y0 + 3, EYE);
-      R(11, y0 - 6, 2, 3, C2); D1(13, y0 - 6, C2);
+      cv.ellipse(hc.x - 0.2, hc.y - 1, headR + 0.7, headR + 0.2, M);
+      cv.poly([[hc.x - headR - 0.6, hc.y - 0.5], [hc.x - headR, hc.y + 4], [hc.x - 1, hc.y + 4.4], [hc.x - 1.4, hc.y]], shade(M, 0.8));
+      cv.capsule(hc.x + 0.5, eyeY - 0.2, hc.x + 4.4, eyeY - 0.2, 0.6, '#120c18');
+      cv.set(hc.x + 2.4, eyeY - 0.2, EYE); cv.set(hc.x + 3.4, eyeY - 0.2, EYE);
+      cv.capsule(hc.x - 1, hc.y - 5.6, hc.x - 3.5, hc.y - 8.5, 1.1, C2);       // 飾りの羽根
     }
     if (has('wizardHat')) {
-      ROWX(y0 - 1, 5, 18, T); ROWX(y0, 6, 17, Td);
-      ROWX(y0 - 2, 8, 15, shade(T, 1.25));
-      ROWX(y0 - 3, 9, 14, T); ROWX(y0 - 4, 10, 14, T); ROWX(y0 - 5, 10, 13, T); ROWX(y0 - 6, 11, 13, T); ROWX(y0 - 7, 12, 14, Td);
-      D1(11, y0 - 2, GEM);
+      cv.ellipse(hc.x - 0.2, hc.y - 3, headR + 3.4, 1.4, HAT);
+      cv.poly([[hc.x - 3.6, hc.y - 3.4], [hc.x + 3.4, hc.y - 3.4], [hc.x - 2, hc.y - 10], [hc.x - 5.5, hc.y - 12.5]], HAT);
+      cv.capsule(hc.x - 3.4, hc.y - 4, hc.x + 3.2, hc.y - 4, 0.7, C2);
+      cv.set(hc.x + 0.5, hc.y - 4, GEM);
     }
-    if (has('strawHat')) {
-      const W1 = '#dcbc64', W2 = '#b0903e';
-      ROWX(y0 - 1, 4, 19, W1); ROWX(y0, 5, 18, W2);
-      ROWX(y0 - 2, 8, 15, '#a83a2a'); ROWX(y0 - 3, 9, 14, W1); ROWX(y0 - 4, 9, 14, W1); ROWX(y0 - 5, 10, 13, W2);
-    }
-    if (has('halo')) { ROWX(y0 - 7, 9, 14, GOLD); D1(8, y0 - 6, GOLD); D1(15, y0 - 6, GOLD); ROWX(y0 - 5, 9, 14, shade(GOLD, 0.8)); }
-    if (has('crown')) { const Cc = look.crown || GOLD; D1(9, y0 - 5, Cc); D1(11, y0 - 5, Cc); D1(12, y0 - 5, Cc); D1(14, y0 - 5, Cc); ROWX(y0 - 4, 9, 14, Cc); ROWX(y0 - 3, 9, 14, shade(Cc, 0.8)); D1(11, y0 - 4, GEM); D1(12, y0 - 4, GEM); }
-    if (has('circlet')) { ROWX(y0, 8, 15, GOLD); D1(11, y0, GEM); D1(12, y0, GEM); }
-    if (has('headband')) { ROWX(y0, 8, 15, C2); D1(16, y0, C2); D1(17, y0 + 1, C2); D1(17, y0 + 2, shade(C2, 0.8)); }
-    if (has('elfEars')) { D1(8, y0 + 3, S); D1(7, y0 + 2, S); D1(6, y0 + 1, S); D1(15, y0 + 3, S); D1(16, y0 + 2, S); D1(17, y0 + 1, Sd); }
-    if (has('mouseEars')) {
-      const pink = '#f0a8b0';
-      R(6, y0 - 5, 4, 3, H); R(7, y0 - 6, 2, 1, H); D1(7, y0 - 4, pink); D1(8, y0 - 4, pink);
-      R(14, y0 - 5, 4, 3, H); R(15, y0 - 6, 2, 1, H); D1(15, y0 - 4, pink); D1(16, y0 - 4, pink);
-    }
+    if (has('strawHat')) { cv.ellipse(hc.x, hc.y - 3, headR + 4.4, 1.5, '#dcbc64'); cv.ellipse(hc.x - 0.3, hc.y - 4.5, headR - 0.3, 2.3, '#c8a050'); cv.capsule(hc.x - 3.4, hc.y - 3.6, hc.x + 3.4, hc.y - 3.6, 0.5, '#a83a2a'); }
+    if (has('halo')) { for (let a = 0; a < 360; a += 20) cv.set(hc.x - 0.5 + Math.cos(rad(a)) * 4.2, hc.y - 7 + Math.sin(rad(a)) * 1.3, GOLD); }
+    if (has('crown')) { const Cc = look.crown || GOLD; cv.poly([[hc.x - 3.4, hc.y - 3], [hc.x + 3.6, hc.y - 3], [hc.x + 3.8, hc.y - 6], [hc.x + 2, hc.y - 4.4], [hc.x + 0.2, hc.y - 6.6], [hc.x - 1.6, hc.y - 4.4], [hc.x - 3.6, hc.y - 6]], Cc); cv.set(hc.x + 0.2, hc.y - 4, GEM); }
+    if (has('circlet')) { cv.capsule(hc.x - 3.8, hc.y - 2.2, hc.x + 4.2, hc.y - 2.6, 0.5, GOLD); cv.set(hc.x + 2.6, hc.y - 2.6, GEM); }
+    if (has('headband')) { cv.capsule(hc.x - 4, hc.y - 2, hc.x + 4.2, hc.y - 2.4, 0.6, C2); cv.capsule(hc.x - 4, hc.y - 2, hc.x - 7, hc.y + 1.5, 0.6, C2); }
+    if (has('mouseEars')) { cv.ellipse(hc.x - 3, hc.y - 5.4, 2.2, 2.2, H); cv.ellipse(hc.x + 2.6, hc.y - 5.8, 2.2, 2.2, H); cv.set(hc.x + 2.6, hc.y - 5.8, '#f0a8b0'); cv.set(hc.x - 3, hc.y - 5.4, '#f0a8b0'); }
 
-    // ===== 8. 体の前の飾り =====
-    if (has('scarf')) { const Q = look.scarf || '#b03a3a'; ROWX(y0 + 6, 9, 14, Q); ROWX(sh, 9, 14, shade(Q, 0.85)); R(13, sh + 1, 2, 5, Q); D1(14, sh + 6, shade(Q, 0.8)); }
-    if (has('satchel')) {
-      for (let i = 0; i <= waist - sh; i++) D1(B.sr - 1 - Math.round(i * (B.sr - B.tl - 1) / (waist - sh)), sh + i, '#5a3a1e');
-      R(B.tl - 2, waist, 4, 4, '#9a6a3a'); ROWX(waist, B.tl - 2, B.tl + 1, '#6a4422'); D1(B.tl, waist + 1, GOLD);
-    }
-    if (has('cape')) { D1(B.sl + 1, sh, GOLD); D1(B.sr - 1, sh, GOLD); }
+    // ===== 7. 体の前の飾り =====
+    if (has('satchel')) { cv.capsule(sF.x, shY, cx - tw, waistY, 0.5, '#5a3a1e'); cv.poly([[cx - tw - 3, waistY], [cx - tw + 1, waistY], [cx - tw + 1, waistY + 4], [cx - tw - 3, waistY + 4]], '#9a6a3a'); }
+    if (has('cape')) { cv.set(sB.x + 1, shY, GOLD); cv.set(sF.x - 1, shY + 0.5, GOLD); }
 
-    // ===== 9. 武器 =====
-    const gx = B.ar + 1;                         // 右手に持つ武器の柄の位置
+    // ===== 8. 手前の腕と武器 =====
+    const wdir = { x: Math.cos(rad(armF.a2)), y: Math.sin(rad(armF.a2)) };
+    const hx = armF.h.x, hy = armF.h.y;
+    const weaponBehind = look.weapon === 'staff' || look.weapon === 'orb' || look.weapon === 'fork';
+    const staffTopY = Math.min(headTop - 3, hy - 22);
+    if (weaponBehind) {
+      const grip = { x: hx, y: hy };
+      const up = pose === 'atk1' ? { x: grip.x + 14, y: grip.y - 8 } : pose === 'cast' || pose === 'atk0' ? { x: grip.x + 3, y: grip.y - 22 } : { x: grip.x + 1.5, y: staffTopY };
+      const down = { x: grip.x - (up.x - grip.x) * 0.45, y: grip.y + (grip.y - up.y) * 0.45 };
+      cv.capsule(down.x, down.y, up.x, up.y, 0.75, WOOD);
+      if (look.weapon === 'staff') { cv.ellipse(up.x, up.y - 1.5, 1.6, 1.6, GEM, true); cv.capsule(up.x - 2, up.y, up.x - 1.5, up.y - 3, 0.5, WOOD); cv.capsule(up.x + 2, up.y, up.x + 1.5, up.y - 3, 0.5, WOOD); }
+      if (look.weapon === 'orb') cv.ellipse(up.x, up.y - 2, 2.4, 2.4, GEM);
+      if (look.weapon === 'fork') { cv.capsule(up.x - 1.6, up.y, up.x + 1.6, up.y, 0.5, METAL); for (const dx of [-1.6, 0, 1.6]) cv.capsule(up.x + dx, up.y, up.x + dx, up.y - 3.5, 0.45, METAL); }
+    }
+    if (look.weapon === 'shield') {
+      const s0 = { x: armB.h.x + 4, y: armB.h.y - 4 };
+      cv.poly([[s0.x - 4, s0.y - 5], [s0.x + 4, s0.y - 5], [s0.x + 4, s0.y + 3], [s0.x, s0.y + 8], [s0.x - 4, s0.y + 3]], M);
+      cv.poly([[s0.x - 2.8, s0.y - 3.8], [s0.x + 2.8, s0.y - 3.8], [s0.x + 2.8, s0.y + 2.4], [s0.x, s0.y + 6], [s0.x - 2.8, s0.y + 2.4]], C1);
+      cv.capsule(s0.x, s0.y - 3, s0.x, s0.y + 4, 0.5, C2); cv.capsule(s0.x - 2, s0.y - 0.5, s0.x + 2, s0.y - 0.5, 0.5, C2);
+    }
+    drawArm(armF, false);
+    const blade = (len, width, col) => {
+      const tip = { x: hx + wdir.x * len, y: hy + wdir.y * len };
+      cv.capsule(hx + wdir.x * 1.5, hy + wdir.y * 1.5, tip.x, tip.y, width, col);
+      cv.capsule(hx + wdir.x * 2, hy + wdir.y * 2, tip.x - wdir.x * 1.5, tip.y - wdir.y * 1.5, Math.max(0.3, width - 0.8), shade(col, 1.25));
+      const px2 = -wdir.y, py2 = wdir.x;
+      cv.capsule(hx + px2 * 2.2 + wdir.x, hy + py2 * 2.2 + wdir.y, hx - px2 * 2.2 + wdir.x, hy - py2 * 2.2 + wdir.y, 0.6, GOLD);   // つば
+      cv.capsule(hx - wdir.x * 2, hy - wdir.y * 2, hx, hy, 0.6, '#3a2418');
+    };
     switch (look.weapon) {
-      case 'sword':
-        D1(gx, hy - 2, GOLD); R(gx, hy - 1, 1, 3, WOOD_D);
-        ROWX(hy + 2, gx - 1, gx + 2, GOLD);
-        R(gx, hy + 3, 1, 13, METAL); R(gx + 1, hy + 3, 1, 12, METAL_D);
-        break;
-      case 'greatsword':
-        R(gx, hy - 2, 1, 4, WOOD_D); D1(gx, hy + 2, GOLD);
-        ROWX(hy - 3, gx - 2, gx + 2, C2 || GOLD);
-        R(gx - 1, hy - 21, 3, 18, M); R(gx, hy - 21, 1, 18, shade(M, 1.3)); R(gx + 1, hy - 21, 1, 18, Md); D1(gx, hy - 22, M);
-        break;
-      case 'axe':
-        R(gx, hy - 12, 1, 19, WOOD);
-        R(gx + 1, hy - 12, 3, 6, METAL); R(gx + 4, hy - 11, 1, 4, METAL_D); D1(gx - 1, hy - 10, METAL_D); D1(gx - 1, hy - 9, METAL_D);
-        break;
-      case 'staff':
-        R(gx, y0 - 4, 1, feet - (y0 - 4) + 1, WOOD); R(gx, y0 + 8, 1, 2, WOOD_D);
-        D1(gx - 1, y0 - 6, WOOD); D1(gx + 1, y0 - 6, WOOD); D1(gx - 1, y0 - 5, WOOD_D); D1(gx + 1, y0 - 5, WOOD_D);
-        R(gx, y0 - 7, 1, 2, GEM); D1(gx, y0 - 8, shade(GEM, 1.2));
-        break;
-      case 'orb':
-        R(gx, y0 - 2, 1, feet - (y0 - 2) + 1, WOOD);
-        R(gx - 1, y0 - 5, 3, 3, GEM); D1(gx - 1, y0 - 5, shade(GEM, 1.3)); D1(gx + 1, y0 - 3, shade(GEM, 0.7));
-        break;
-      case 'wand':
-        R(gx, hy - 5, 1, 7, WOOD);
-        ROWX(hy - 7, gx - 1, gx + 1, GEM); D1(gx, hy - 8, GEM); D1(gx, hy - 6, GEM);
-        break;
-      case 'fork':
-        R(gx, y0 - 3, 1, feet - (y0 - 3) + 1, WOOD);
-        ROWX(y0 - 4, gx - 1, gx + 1, METAL_D);
-        R(gx - 1, y0 - 7, 1, 3, METAL); R(gx, y0 - 7, 1, 3, METAL); R(gx + 1, y0 - 7, 1, 3, METAL);
-        break;
-      case 'daggers':
-        D1(gx, hy + 1, WOOD_D); R(gx, hy + 2, 1, 4, METAL); D1(gx, hy + 1, GOLD);
-        D1(B.al - 1, hy + 1, GOLD); R(B.al - 1, hy + 2, 1, 4, METAL);
-        break;
-      case 'bow': {
-        const bx = B.al - 3;
-        R(bx, hy - 6, 1, 13, WOOD);
-        R(bx + 1, hy - 10, 1, 4, WOOD); R(bx + 1, hy + 7, 1, 4, WOOD);
-        D1(bx + 2, hy - 11, WOOD_D); D1(bx + 2, hy + 11, WOOD_D);
-        R(bx + 3, hy - 10, 1, 21, CLOTH_W);
-        R(B.al, hy, 2, 2, S);
+      case 'sword': blade(14, 1.0, M); break;
+      case 'greatsword': blade(20, 1.6, M); break;
+      case 'shield': blade(11, 0.9, METAL); break;
+      case 'axe': {
+        const tip = { x: hx + wdir.x * 13, y: hy + wdir.y * 13 };
+        cv.capsule(hx - wdir.x * 3, hy - wdir.y * 3, tip.x, tip.y, 0.7, WOOD);
+        const px2 = -wdir.y, py2 = wdir.x;
+        cv.poly([[tip.x - wdir.x * 5, tip.y - wdir.y * 5], [tip.x + px2 * 5 - wdir.x * 6, tip.y + py2 * 5 - wdir.y * 6], [tip.x + px2 * 5.5, tip.y + py2 * 5.5], [tip.x, tip.y]], M);
         break;
       }
-      case 'shield': {
-        D1(gx, hy - 2, GOLD); R(gx, hy - 1, 1, 3, WOOD_D);
-        ROWX(hy + 2, gx - 1, gx + 2, GOLD);
-        R(gx, hy + 3, 1, 12, METAL); R(gx + 1, hy + 3, 1, 11, METAL_D);
-        const s0 = B.al - 3, sy = sh + 3;
-        const kite = ['MMMMMM', 'MCCCCM', 'MCGGCM', 'MCGGCM', 'MCCCCM', 'MCCCCM', 'MCCCCM', 'MCCCCM', '.MCCM.', '.MCCM.', '..MM..'];
-        paint(g, kite, sy, { M: M, C: C1, G: C2 }, s0);
+      case 'daggers': {
+        cv.capsule(hx + wdir.x, hy + wdir.y, hx + wdir.x * 6, hy + wdir.y * 6, 0.6, METAL);
+        cv.capsule(armB.h.x, armB.h.y, armB.h.x + 1, armB.h.y + 5, 0.6, METAL);
+        break;
+      }
+      case 'wand': { const tip = { x: hx + wdir.x * 6 + 1, y: hy - 5 }; cv.capsule(hx, hy, tip.x, tip.y, 0.5, WOOD); cv.ellipse(tip.x, tip.y - 1, 1.4, 1.4, GEM, true); cv.set(tip.x, tip.y - 3, shade(GEM, 1.3)); break; }
+      case 'bow': {
+        const bx = hx + 2, by = hy - 1;
+        for (let a = -70; a <= 70; a += 7) cv.set(bx + Math.cos(rad(a)) * 3, by + Math.sin(rad(a)) * 10, WOOD);
+        for (let a = -70; a <= 70; a += 7) cv.set(bx + Math.cos(rad(a)) * 3 + 0.7, by + Math.sin(rad(a)) * 10, shade(WOOD, 0.7));
+        cv.capsule(bx + 1, by - 9.5, bx + (pose === 'atk0' ? -3 : 1), by, 0.3, CLOTH_W);
+        cv.capsule(bx + (pose === 'atk0' ? -3 : 1), by, bx + 1, by + 9.5, 0.3, CLOTH_W);
+        if (pose === 'atk0') cv.capsule(bx - 3, by, bx + 7, by, 0.4, '#c8a878');
         break;
       }
       default: break;
     }
-
-    const keep = new Set([EYE, GEM, GOLD]);
-    return outline(sideShade(g, keep));
+    return cv.finish(new Set([EYE, GEM, GOLD, shade(EYE, 1.4), '#f4f0f0']));
   }
 
-  /** 顔のまわり（16×16）を切り出す。y0 は顔のいちばん上 */
+  /** 顔のまわり（20×20）を切り出す */
   function faceGrid(look) {
-    const full = heroGrid(look, 0);
-    const y0 = 7 + (look.h || 0);
-    const top = Math.max(0, y0 - 6);
-    const out = makeGrid(16, 16);
-    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
-      const sy = top + y, sx = 4 + x;
-      if (sy < HH) out[y][x] = full[sy][sx];
-    }
+    const full = heroGrid(look, 'idle0');
+    const hgt = 54 - (look.h || 0) * 2.2;
+    const top = Math.max(0, Math.round(62 - hgt - 4));
+    const out = makeGrid(20, 20);
+    for (let y = 0; y < 20; y++) for (let x = 0; x < 20; x++) { const sy = top + y, sx = 6 + x; if (sy < HH) out[y][x] = full[sy][sx]; }
     return out;
   }
 
@@ -485,7 +512,7 @@
 
   function enemyGrid(key) {
     const tpl = D.ENEMIES[key];
-    if (tpl.sprite === 'human') return heroGrid(tpl.look, 0);
+    if (tpl.sprite === 'human') return heroGrid(tpl.look, 'idle0');
     const art = ENEMY_ART[tpl.sprite];
     const pal = Object.assign({}, art.pal, tpl.tint ? TINTS[tpl.tint] : {});
     const g = makeGrid(16, 16);
@@ -497,13 +524,20 @@
   // ---------- 外に見せる道具 ----------
   const cache = {};
   const Sprites = {
-    /** 英雄の全身（24×48）。frame: 0 立ち / 1 歩き */
-    heroCanvas(id, frame) {
-      const k = 'h:' + id + ':' + (frame || 0);
-      if (!cache[k]) cache[k] = toCanvas(heroGrid(D.heroById[id].look, frame || 0));
+    /** 英雄の全身（32×64）。pose: idle0 idle1 walk0〜3 atk0 atk1 cast hurt */
+    heroCanvas(id, pose) {
+      pose = pose || 'idle0';
+      if (typeof pose === 'number') pose = pose ? 'walk0' : 'idle0';
+      const k = 'h:' + id + ':' + pose;
+      if (!cache[k]) cache[k] = toCanvas(heroGrid(D.heroById[id].look, pose));
       return cache[k];
     },
-    /** 英雄の顔まわり（16×16） */
+    /** look から直接（人型の敵など） */
+    lookCanvas(key, look, pose) {
+      const k = 'l:' + key + ':' + (pose || 'idle0');
+      if (!cache[k]) cache[k] = toCanvas(heroGrid(look, pose || 'idle0'));
+      return cache[k];
+    },
     faceCanvas(id) {
       const k = 'f:' + id;
       if (!cache[k]) cache[k] = toCanvas(faceGrid(D.heroById[id].look));
@@ -527,17 +561,17 @@
       cache[k] = c.toDataURL('image/png');
       return cache[k];
     },
-    heroUrl(id, scale) { return this.url(this.heroCanvas(id, 0), scale || 4); },
-    faceUrl(id, scale) { return this.url(this.faceCanvas(id), scale || 4); },
+    heroUrl(id, scale) { return this.url(this.heroCanvas(id), scale || 3); },
+    faceUrl(id, scale) { return this.url(this.faceCanvas(id), scale || 3); },
     enemyUrl(key, scale) { return this.url(this.enemyCanvas(key), scale || 4); },
     /** 全身の <img>。alt は空（名前は別に書くため） */
     heroImg(id, cls) { return `<img class="px body ${cls || ''}" src="${this.heroUrl(id)}" alt="" width="${HW * 2}" height="${HH * 2}">`; },
-    /** 顔の <img> */
-    faceImg(id, cls) { return `<img class="px facei ${cls || ''}" src="${this.faceUrl(id)}" alt="" width="32" height="32">`; },
+    faceImg(id, cls) { return `<img class="px facei ${cls || ''}" src="${this.faceUrl(id)}" alt="" width="40" height="40">`; },
     enemyImg(key, cls) {
       const human = D.ENEMIES[key].sprite === 'human';
       return `<img class="px ${human ? 'body' : 'mon'} ${cls || ''}" src="${this.enemyUrl(key)}" alt="" width="${(human ? HW : 16) * 2}" height="${(human ? HH : 16) * 2}">`;
     },
+    POSES: Object.keys(POSES),
     HW, HH,
   };
 
